@@ -47,14 +47,20 @@ def _acquire_single_instance() -> bool:
 class App:
     def __init__(self) -> None:
         self.config = config_mod.load()
-        # Persist defaults on first run so the user has a config.json to edit.
-        config_mod.save(self.config)
-        self.features = Features(self.config)
+        # Persist defaults on first run so the user has a config.json to edit,
+        # but never write over a config.json we failed to read.
+        if not self.config.load_error:
+            config_mod.save(self.config)
+        self.features = Features(self.config, notify=self._notify)
         self.command_queue: "queue.Queue[str]" = queue.Queue()
         self.window: MessageWindow | None = None
         self.tray: TrayIcon | None = None
         self.hotkeys: HotkeyManager | None = None
         self._worker_ready = threading.Event()
+
+    def _notify(self, title: str, text: str, warning: bool = False) -> None:
+        if self.tray is not None:
+            self.tray.notify(title, text, warning)
 
     # --- worker thread: hotkeys + tray + message loop ---
     def _worker(self) -> None:
@@ -81,6 +87,8 @@ class App:
         )
         self._worker_ready.set()
 
+        if self.config.load_error:
+            _message_box(self.config.load_error, flags=MB_ICONWARNING)
         if failures:
             _message_box(
                 "These hotkeys could not be registered (already in use by "
@@ -91,7 +99,9 @@ class App:
 
         self.window.run()  # blocks until stop()
 
-        # Cleanup once the loop ends.
+        # Cleanup once the loop ends. Put the user's clipboard back if a
+        # restore is still pending.
+        self.features.flush_restore()
         if self.tray:
             self.tray.remove()
         if self.hotkeys:

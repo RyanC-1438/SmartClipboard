@@ -26,6 +26,10 @@ NIM_DELETE = 2
 NIF_MESSAGE = 0x01
 NIF_ICON = 0x02
 NIF_TIP = 0x04
+NIF_INFO = 0x10
+NIIF_INFO = 0x01
+NIIF_WARNING = 0x02
+NIIF_NOSOUND = 0x10
 
 IDI_APPLICATION = 32512
 TPM_RETURNCMD = 0x0100
@@ -116,6 +120,15 @@ class TrayIcon:
             self._on_settings()
         elif cmd == ID_QUIT:
             self._on_quit()
+
+    def notify(self, title: str, text: str, warning: bool = False) -> None:
+        """Show a silent tray balloon (a toast on Windows 10/11)."""
+        nid = self._nid
+        nid.uFlags = NIF_INFO
+        nid.szInfoTitle = title[:63]
+        nid.szInfo = text[:255]
+        nid.dwInfoFlags = (NIIF_WARNING if warning else NIIF_INFO) | NIIF_NOSOUND
+        _shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(nid))
 
     def remove(self) -> None:
         _shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(self._nid))

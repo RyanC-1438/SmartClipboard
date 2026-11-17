@@ -78,6 +78,24 @@ Slot 1 *is* the backup clipboard: `Ctrl+Shift+Win+C` fills it and
 toggle button, and use **Options…** for the per-rule case / protect / regex
 settings. Changes save automatically.
 
+### How pasting works (and what it does to your clipboard)
+- The paste is sent when you **release** Ctrl/Shift/Win, so you can keep them
+  held and tap R twice; each tap queues one paste.
+- Your clipboard is put back **in full** (images, files, Excel cells, rich
+  text), `restore_delay_ms` (default 800) after the paste. This happens in the
+  background, so the hotkey doesn't feel slower. If you copy something during
+  that time, your new copy is kept.
+- **Win+V history**: the restore of your own clipboard is never added (it's
+  already there from your copy). The pasted result is added, so you can
+  re-paste it from Win+V; set `"paste_results_in_history": false` in
+  `config.json` to keep it out too.
+- **Apps running as administrator** ignore simulated keys from a normal app
+  (a Windows rule). SmartClipboard detects this and, instead of failing
+  silently, leaves the result on your clipboard and tells you to press Ctrl+V.
+  It never runs elevated itself.
+- If `config.json` can't be read (e.g. a typo), a copy is saved as
+  `config.json.broken-<time>` and you get a warning; your rules aren't lost.
+
 ## Why it can't interfere with your typing / isn't a keylogger
 
 It registers global hotkeys through the Windows `RegisterHotKey` API. Windows

@@ -20,11 +20,9 @@ VK_V = 0x56
 KEYEVENTF_KEYUP = 0x0002
 INPUT_KEYBOARD = 1
 
-# Every modifier key that might be physically held when our hotkey fires. We
-# inject key-up for all of them before sending our own chord, otherwise (e.g.)
-# a held Ctrl+Shift+Win turns our injected Ctrl+V into Ctrl+Shift+Win+V, which
-# the target app does not recognise as "paste". Sending key-up for a key that
-# is not down is harmless.
+# Every modifier key that might be physically held when our hotkey fires. If
+# they were still down, our injected Ctrl+V would become Ctrl+Shift+Win+V, which
+# the target app does not recognise as "paste", so we wait for their release.
 _MODIFIER_VKS = (
     0x5B, 0x5C,        # LWIN, RWIN
     0x10, 0xA0, 0xA1,  # SHIFT, LSHIFT, RSHIFT
@@ -100,15 +98,45 @@ def _send(inputs) -> None:
     _user32.SendInput(len(inputs), arr, ctypes.sizeof(_INPUT))
 
 
+_user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+_user32.GetAsyncKeyState.restype = ctypes.c_short
+
+
+def _held_modifiers() -> list:
+    return [vk for vk in _MODIFIER_VKS if _user32.GetAsyncKeyState(vk) & 0x8000]
+
+
+def wait_for_modifiers_released(timeout: float = 2.0) -> bool:
+    """Wait until the user lets go of the hotkey's modifiers. Returns True if
+    they were released in time.
+
+    Sending our chord only after a real release means we never have to fake a
+    key-up for a key the user is still holding. Faking it desynchronises
+    Windows' idea of the keyboard: a second tap of the hotkey letter while the
+    modifiers are still held would then type that letter instead of firing the
+    hotkey again. Now a second tap simply queues a second hotkey message.
+    """
+    deadline = time.monotonic() + timeout
+    while _held_modifiers():
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+    return True
+
+
 def _release_held_modifiers() -> None:
-    """Inject key-up for all modifier keys so the hotkey's own modifiers (which
-    the user is still physically holding) don't contaminate the chord we send."""
-    _send([_key(vk, True) for vk in _MODIFIER_VKS])
-    time.sleep(0.02)  # let the target app process the releases first
+    """Fallback if the user is still holding modifiers after the timeout:
+    inject key-up for the ones that are down so they don't contaminate the
+    chord we send (Ctrl+Shift+Win+V is not "paste")."""
+    held = _held_modifiers()
+    if held:
+        _send([_key(vk, True) for vk in held])
+        time.sleep(0.02)  # let the target app process the releases first
 
 
 def _chord(vk: int) -> None:
-    """Release any held modifiers, then press Ctrl + <vk> and release both."""
+    """Wait for (or force) the modifiers up, then press Ctrl + <vk>."""
+    wait_for_modifiers_released()
     _release_held_modifiers()
     _send([_key(VK_CONTROL, False), _key(vk, False)])
     time.sleep(0.01)
