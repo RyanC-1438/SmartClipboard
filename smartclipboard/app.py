@@ -16,6 +16,7 @@ from ctypes import wintypes
 
 from . import APP_NAME, __version__
 from . import config as config_mod
+from . import startup
 from .features import Features
 from .gui import run_gui
 from .hotkeys import HotkeyManager, describe
@@ -28,6 +29,9 @@ ERROR_ALREADY_EXISTS = 183
 MB_OK = 0x0
 MB_ICONWARNING = 0x30
 
+WM_APP_REBIND = 0x0400 + 2  # GUI -> worker: re-register hotkeys
+_user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+_user32.PostMessageW.restype = wintypes.BOOL
 _user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
 _user32.MessageBoxW.restype = ctypes.c_int
 _kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
@@ -57,6 +61,13 @@ class App:
         self.tray: TrayIcon | None = None
         self.hotkeys: HotkeyManager | None = None
         self._worker_ready = threading.Event()
+        self._rebind_requests: "queue.Queue[dict]" = queue.Queue()
+        self._actions = {
+            "backup_copy": self.features.backup_copy,
+            "backup_paste": self.features.backup_paste,
+            "replace_paste": self.features.replace_paste,
+            "open_settings": lambda: self.command_queue.put("show"),
+        }
 
     def _notify(self, title: str, text: str, warning: bool = False) -> None:
         if self.tray is not None:
@@ -66,15 +77,10 @@ class App:
     def _worker(self) -> None:
         self.window = MessageWindow()
         self.hotkeys = HotkeyManager(self.window)
+        self.window.on(WM_APP_REBIND, self._on_rebind)
 
-        actions = {
-            "backup_copy": self.features.backup_copy,
-            "backup_paste": self.features.backup_paste,
-            "replace_paste": self.features.replace_paste,
-            "open_settings": lambda: self.command_queue.put("show"),
-        }
         failures = []
-        for action, callback in actions.items():
+        for action, callback in self._actions.items():
             hk = self.config.hotkeys.get(action, {})
             mods, key = hk.get("mods", []), hk.get("key", "")
             if not self.hotkeys.register(mods, key, callback):
@@ -92,7 +98,7 @@ class App:
         if failures:
             _message_box(
                 "These hotkeys could not be registered (already in use by "
-                "another app). Edit config.json to change them:\n\n"
+                "another app). Change them in Settings → Change hotkeys…:\n\n"
                 + "\n".join(failures),
                 flags=MB_ICONWARNING,
             )
@@ -109,6 +115,49 @@ class App:
         if self.window:
             self.window.destroy()
 
+    # --- live hotkey changes from the Settings window ---
+    def rebind_hotkeys(self, wanted: dict) -> list:
+        """Called on the GUI thread. RegisterHotKey only works on the thread
+        that owns the window, so hand the request to the worker and wait.
+        Returns a list of (action, reason) for chords that could not be used;
+        those actions keep their previous chord."""
+        if self.window is None or not self.window.hwnd:
+            return [(a, "app is not ready") for a in wanted]
+        req = {"wanted": wanted, "done": threading.Event(), "failures": None}
+        self._rebind_requests.put(req)
+        _user32.PostMessageW(self.window.hwnd, WM_APP_REBIND, 0, 0)
+        if not req["done"].wait(timeout=6):
+            return [(a, "timed out") for a in wanted]
+        return req["failures"]
+
+    def _on_rebind(self, _wparam: int, _lparam: int) -> None:
+        """Worker thread: re-register every hotkey, keeping the old chord for
+        any action whose new chord is taken by another app."""
+        while True:
+            try:
+                req = self._rebind_requests.get_nowait()
+            except queue.Empty:
+                return
+            failures = []
+            try:
+                old = {a: dict(v) for a, v in self.config.hotkeys.items()}
+                self.hotkeys.unregister_all()
+                for action, callback in self._actions.items():
+                    new = req["wanted"].get(action, old.get(action, {}))
+                    if self.hotkeys.register(new.get("mods", []), new.get("key", ""), callback):
+                        self.config.hotkeys[action] = new
+                        continue
+                    if new != old.get(action):
+                        failures.append((action, f"{describe(new.get('mods', []), new.get('key', ''))} "
+                                                 "is already used by another app"))
+                    else:
+                        failures.append((action, "could not be registered"))
+                    prev = old.get(action, {})
+                    self.hotkeys.register(prev.get("mods", []), prev.get("key", ""), callback)
+            finally:
+                req["failures"] = failures
+                req["done"].set()
+
     def _on_save(self) -> None:
         # Features reads self.config.rules live, so nothing else is needed.
         pass
@@ -121,11 +170,13 @@ class App:
         if not _acquire_single_instance():
             _message_box(f"{APP_NAME} is already running.", flags=MB_ICONWARNING)
             return
+        startup.refresh_path()
         worker = threading.Thread(target=self._worker, daemon=True, name="sc-worker")
         worker.start()
         self._worker_ready.wait(timeout=5)
         # GUI loop runs on the main thread and blocks until quit.
-        run_gui(self.config, self.command_queue, self._on_save, self._on_quit)
+        run_gui(self.config, self.command_queue, self._on_save, self._on_quit,
+                rebind=self.rebind_hotkeys)
         worker.join(timeout=3)
 
 

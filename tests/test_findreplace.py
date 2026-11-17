@@ -6,7 +6,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from smartclipboard.findreplace import Rule, apply_rule, apply_rules, rule_error
+from smartclipboard.findreplace import (Rule, apply_rule, apply_rules,
+                                        apply_rules_counted, apply_rules_spans,
+                                        rule_error)
 
 
 class TestFindReplace(unittest.TestCase):
@@ -36,7 +38,8 @@ class TestFindReplace(unittest.TestCase):
 
     def test_replace_text_absent_means_no_protection(self):
         # With replace "X", X never appears, so every test1 is replaced -> X X2 X!
-        r = Rule(find="test1", replace="X", protect_existing=True)
+        r = Rule(find="test1", replace="X", protect_existing=True,
+                 keep_numbers_whole=False)
         self.assertEqual(apply_rule("test1 test12 test1!", r), "X X2 X!")
 
     def test_matches_inside_word_between_letters(self):
@@ -51,7 +54,8 @@ class TestFindReplace(unittest.TestCase):
                          "test12 test12 test12")
 
     def test_protect_off_matches_substring(self):
-        r = Rule(find="test1", replace="X", protect_existing=False)
+        r = Rule(find="test1", replace="X", protect_existing=False,
+                 keep_numbers_whole=False)
         self.assertEqual(apply_rule("test12", r), "X2")
 
     def test_protection_honors_case_insensitive(self):
@@ -203,6 +207,84 @@ class TestRegexRules(unittest.TestCase):
         self.assertLess(time.perf_counter() - t, 2.0)
         self.assertEqual(out.count("Z2Status"), 20000)
 
+
+
+class TestKeepNumbersWhole(unittest.TestCase):
+    def test_default_on(self):
+        self.assertTrue(Rule(find="x").keep_numbers_whole)
+        self.assertTrue(Rule.from_dict({"find": "x"}).keep_numbers_whole)
+
+    def test_zone_example(self):
+        r = Rule(find="Z1", replace="Z2")
+        self.assertEqual(apply_rules("Z1Status Z10Status Z12 Z1_ok Z1", [r]),
+                         "Z2Status Z10Status Z12 Z2_ok Z2")
+
+    def test_leading_digit_not_cut(self):
+        r = Rule(find="1A", replace="2A")
+        self.assertEqual(apply_rules("1A 11A x1A", [r]), "2A 11A x2A")
+
+    def test_off_restores_substring_matching(self):
+        r = Rule(find="Z1", replace="Z2", keep_numbers_whole=False)
+        self.assertEqual(apply_rules("Z10", [r]), "Z20")
+
+    def test_non_digit_edges_unaffected(self):
+        r = Rule(find="Tag", replace="Tg")
+        self.assertEqual(apply_rules("1Tag2", [r]), "1Tg2")
+
+    def test_skipped_match_lets_later_occurrence_match(self):
+        r = Rule(find="1", replace="2")
+        self.assertEqual(apply_rules("11 1", [r]), "11 2")
+
+    def test_not_applied_to_regex_rules(self):
+        r = Rule(find="1", replace="2", regex=True)
+        self.assertEqual(apply_rules("11", [r]), "22")
+
+    def test_roundtrip(self):
+        r = Rule(find="a", keep_numbers_whole=False)
+        self.assertFalse(Rule.from_dict(r.to_dict()).keep_numbers_whole)
+
+
+class TestCountAndSwap(unittest.TestCase):
+    def test_count(self):
+        rules = [Rule(find="Z1", replace="Z2"), Rule(find="foo", replace="bar")]
+        self.assertEqual(apply_rules_counted("Z1 foo Z1 Z10", rules), ("Z2 bar Z2 Z10", 3))
+        self.assertEqual(apply_rules_counted("nothing", rules), ("nothing", 0))
+        self.assertEqual(apply_rules_counted("x", []), ("x", 0))
+
+    def test_swap(self):
+        r = Rule(find="Z1", replace="Z2", case_sensitive=True, protect_existing=False)
+        s = r.swapped()
+        self.assertEqual((s.find, s.replace, s.case_sensitive, s.protect_existing),
+                         ("Z2", "Z1", True, False))
+        self.assertEqual(apply_rules("Z2Status", [s]), "Z1Status")
+
+    def test_swapping_a_rule_set_reverses_it(self):
+        rules = [Rule(find="Z1", replace="Z2"), Rule(find="Z2", replace="Z3")]
+        back = [r.swapped() for r in rules]
+        self.assertEqual(apply_rules("Z3Status", back), "Z2Status")
+        self.assertEqual(apply_rules("Z2Status", back), "Z1Status")
+
+    def test_spans_point_at_replacements_in_output(self):
+        # A zero-width match ("^") doesn't stop a later rule matching at the
+        # same position.
+        rules = [Rule(find="^", replace="> ", regex=True), Rule(find="Z1", replace="Zone1")]
+        out, spans = apply_rules_spans("Z1 a\nb Z1", rules)
+        self.assertEqual(out, "> Zone1 a\n> b Zone1")
+        self.assertEqual([out[a:b] for a, b in spans], ["> ", "Zone1", "> ", "Zone1"])
+
+    def test_swapped_tunnel_rule_still_fires(self):
+        # Tunnel1 -> Tunnel12 (protected) reversed is Tunnel12 -> Tunnel1; the
+        # guard must not block it just because Find contains Replace.
+        fwd = Rule(find="Tunnel1", replace="Tunnel12", protect_existing=True)
+        back = fwd.swapped()
+        self.assertEqual(apply_rules("Tunnel1 and Tunnel12", [fwd]), "Tunnel12 and Tunnel12")
+        self.assertEqual(apply_rules("Tunnel12 and Tunnel12", [back]), "Tunnel1 and Tunnel1")
+        self.assertEqual(apply_rules("TUNNEL12", [back]), "Tunnel1")
+
+    def test_can_swap(self):
+        self.assertTrue(Rule(find="a", replace="b").can_swap())
+        self.assertFalse(Rule(find="a", replace="").can_swap())
+        self.assertFalse(Rule(find="a", replace="b", regex=True).can_swap())
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

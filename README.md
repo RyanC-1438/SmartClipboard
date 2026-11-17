@@ -38,8 +38,21 @@ Rules follow these guarantees:
   into `Tunnel12 and Tunnel12` (never `Tunnel122`). Because the guard is the
   replace text itself, it only matters when Replace contains Find — e.g. with
   `test1` → `X`, `X` never appears, so `test1 test12 test1!` fully becomes
-  `X X2 X!`. Ignored when Replace is empty (a deletion).
+  `X X2 X!`. Ignored when Replace is empty (a deletion) or when Find already
+  contains Replace (e.g. a reversed `Tunnel12` → `Tunnel1`).
+- **Keep numbers whole** (on by default, per rule in Options). A match that
+  would cut a number in two is skipped, so `Z1` → `Z2` changes `Z1Status` and
+  `Z1_x` but leaves `Z10Status` and `Z12` alone. Turn it off for plain
+  substring matching.
 - **Delete by replacing with nothing.** Leave the Replace box empty.
+- **Swap direction.** The ↔ button on a rule swaps Find and Replace;
+  **↔ Swap all** reverses every rule (e.g. to undo a `Z1`→`Z2` rename). Regex
+  rules and rules with an empty Replace are skipped.
+- **Order matters only for ties.** Use ▲▼ to move a rule; the higher rule wins
+  when two match at the same spot.
+- **Preview…** opens a box where you type or paste sample text and see the
+  result live with replacements highlighted. It never reads the clipboard on
+  its own.
 
 #### Regex rules (opt-in, per rule)
 - Find is a Python regular expression. `^` and `$` match at the start/end of
@@ -75,8 +88,20 @@ Slot 1 *is* the backup clipboard: `Ctrl+Shift+Win+C` fills it and
 ### Settings
 `Ctrl+Shift+Win+S` (or the tray icon → *Settings*) opens the rules table. Edit
 **Find** and **Replace** directly in the row, flip each rule On/Off with its
-toggle button, and use **Options…** for the per-rule case / protect / regex
-settings. Changes save automatically.
+toggle button, and use **Options…** for the per-rule case / protect / numbers /
+regex settings. Changes save automatically.
+
+The **General** box at the bottom holds:
+- **Change hotkeys…**: pick modifiers and a key for each action. The change
+  takes effect immediately (no restart). If another app already owns a chord,
+  that action keeps its old one and you're told.
+- **Start with Windows** (in the .exe only): adds a per-user startup entry
+  (`HKCU\…\Run`, no admin). Untick to remove it.
+- **Notifications**: *Every paste* shows a small tray notification with what
+  was pasted and how many replacements; *Problems only* shows just "no
+  matches", blocked pastes, etc.; *Off* shows nothing.
+- **Restore delay**: how long the pasted text stays on the clipboard before
+  yours is put back (see below).
 
 ### How pasting works (and what it does to your clipboard)
 - The paste is sent when you **release** Ctrl/Shift/Win, so you can keep them
@@ -105,8 +130,11 @@ low-level keyboard hook. It also:
 
 - requires **no administrator rights** (no UAC elevation),
 - makes **no network connections**,
-- only reads/writes a single `config.json` (rules, settings, palette slots 2–5) under
-  `%APPDATA%\SmartClipboard`,
+- only reads/writes a single `config.json` (rules, settings, palette slots 2–5)
+  under `%APPDATA%\SmartClipboard`, plus one registry value only if you tick
+  "Start with Windows",
+- only reads the clipboard when you use one of its hotkeys or right-click a
+  palette slot,
 - contains no `eval`/`exec`/shell execution.
 
 ## Hotkey choice
@@ -115,8 +143,8 @@ low-level keyboard hook. It also:
 effectively unused by Windows and other apps, and it never combines `Ctrl+Alt`
 (that pair is `AltGr` on many keyboard layouts). `Win+Alt+<key>` was avoided
 because Xbox Game Bar owns it (e.g. `Win+Alt+R` records, `Win+Alt+C` clips). If
-a hotkey is already taken, the app shows a warning at startup; edit
-`%APPDATA%\SmartClipboard\config.json` and restart to change it.
+a hotkey is already taken, the app shows a warning at startup; change it in
+Settings → **Change hotkeys…**.
 
 ## Run from source
 

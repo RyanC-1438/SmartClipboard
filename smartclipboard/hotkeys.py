@@ -39,6 +39,29 @@ _NAMED_VK = {
 }
 
 
+# Keys offered in the Settings hotkey editor, in display order.
+KEY_CHOICES = ([chr(c) for c in range(ord("A"), ord("Z") + 1)]
+               + [str(d) for d in range(10)]
+               + [f"F{i}" for i in range(1, 25)]
+               + ["Space", "Enter", "Tab", "Esc"])
+
+
+def reserved_reason(mods: List[str], key: str) -> str:
+    """Why a chord is a bad idea even if RegisterHotKey would accept it ("" if
+    it's fine)."""
+    m = {x.lower() for x in mods}
+    k = key.upper()
+    if not m:
+        return "Needs at least one modifier, or it would block normal typing."
+    if m == {"shift"}:
+        return "Shift alone would block typing that character."
+    if {"ctrl", "shift", "win"} <= m and k == "B":
+        return "Win+Ctrl+Shift+B is the Windows graphics-driver reset."
+    if "win" in m and len(k) == 1 and k.isdigit():
+        return "Win+number chords open taskbar apps in Windows."
+    return ""
+
+
 def mods_to_flags(mods: List[str]) -> int:
     flags = MOD_NOREPEAT
     for m in mods:
@@ -62,7 +85,8 @@ def key_to_vk(key: str) -> int:
 
 def describe(mods: List[str], key: str) -> str:
     order = ["win", "ctrl", "alt", "shift"]
-    parts = [m.capitalize() for m in order if m in [x.lower() for x in mods]]
+    given = ["ctrl" if x.lower() == "control" else x.lower() for x in mods]
+    parts = [m.capitalize() for m in order if m in given]
     parts.append(key.upper())
     return "+".join(parts)
 
