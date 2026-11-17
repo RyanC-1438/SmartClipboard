@@ -15,6 +15,7 @@ from .findreplace import Rule
 
 APP_DIR_NAME = "SmartClipboard"
 CONFIG_FILENAME = "config.json"
+PALETTE_SIZE = 5
 
 # Default hotkeys. Modifier strings are a subset of {"win","ctrl","alt","shift"}
 # and the key is a single character or a named key understood by hotkeys.py.
@@ -45,13 +46,20 @@ def config_path() -> str:
 class Config:
     hotkeys: Dict[str, Dict] = field(default_factory=lambda: _clone(DEFAULT_HOTKEYS))
     rules: List[Rule] = field(default_factory=list)
-    # The most-recent backup clipboard value is intentionally NOT persisted to
-    # disk -- it lives only in memory while the app runs.
+    # Repeated replace-pastes (without re-copying) advance the previous result
+    # one more step through the rules instead of pasting the same text again.
+    chain_paste: bool = False
+    # Palette slots shown at the top of the Settings window. Slot 0 IS the
+    # backup clipboard (Ctrl+Shift+Win+C/V); like before it is intentionally
+    # never written to disk. Slots 1..4 are pinned on purpose and are saved.
+    palette: List[str] = field(default_factory=lambda: [""] * PALETTE_SIZE)
 
     def to_dict(self) -> dict:
         return {
             "hotkeys": self.hotkeys,
             "rules": [r.to_dict() for r in self.rules],
+            "chain_paste": self.chain_paste,
+            "palette": [""] + list(self.palette[1:]),
         }
 
     @classmethod
@@ -64,7 +72,13 @@ class Config:
                     "key": str(hk.get("key", "")),
                 }
         rules = [Rule.from_dict(r) for r in (d.get("rules") or []) if isinstance(r, dict)]
-        return cls(hotkeys=hotkeys, rules=rules)
+        raw = d.get("palette")
+        raw = raw if isinstance(raw, list) else []
+        palette = [str(v) if isinstance(v, str) else "" for v in raw[:PALETTE_SIZE]]
+        palette += [""] * (PALETTE_SIZE - len(palette))
+        palette[0] = ""  # the backup slot is never restored from disk
+        return cls(hotkeys=hotkeys, rules=rules,
+                   chain_paste=bool(d.get("chain_paste", False)), palette=palette)
 
 
 def _clone(d: Dict[str, Dict]) -> Dict[str, Dict]:

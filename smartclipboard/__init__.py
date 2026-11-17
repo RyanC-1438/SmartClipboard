@@ -8,9 +8,9 @@ audit:
   - keyboard_send.py  synthesize Ctrl+C / Ctrl+V via the Win32 SendInput API
   - findreplace.py    pure, side-effect-free find & replace logic (unit tested)
   - config.py         load/save settings as JSON under %APPDATA%
-  - features.py       wires the two clipboard features to hotkey actions
+  - features.py       backup clipboard, replace-paste and chain mode
   - tray.py           system tray icon (ctypes Shell_NotifyIcon)
-  - gui.py            tkinter settings window
+  - gui.py            tkinter settings window and palette
   - app.py            entry point; ties everything together
 """
 

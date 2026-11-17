@@ -1,0 +1,3 @@
+# Build-time only. The app itself has ZERO third-party runtime dependencies
+# (standard library + ctypes). PyInstaller is needed only to produce the .exe.
+pyinstaller==6.11.1
