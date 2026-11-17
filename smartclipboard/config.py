@@ -18,6 +18,7 @@ from .findreplace import Rule
 APP_DIR_NAME = "SmartClipboard"
 CONFIG_FILENAME = "config.json"
 PALETTE_SIZE = 5
+NOTIFY_LEVELS = ("all", "problems", "off")
 
 # Default hotkeys. Modifier strings are a subset of {"win","ctrl","alt","shift"}
 # and the key is a single character or a named key understood by hotkeys.py.
@@ -30,6 +31,7 @@ DEFAULT_HOTKEYS: Dict[str, Dict] = {
     "replace_paste": {"mods": ["ctrl", "shift", "win"], "key": "R"},
     "open_settings": {"mods": ["ctrl", "shift", "win"], "key": "S"},
 }
+_MOD_NAMES = {"ctrl": "ctrl", "control": "ctrl", "shift": "shift", "alt": "alt", "win": "win"}
 
 
 def config_dir() -> str:
@@ -64,8 +66,14 @@ class Config:
     # history. The restore of the user's own clipboard is always kept out of it
     # (it is already there from their copy, so it would only be a duplicate).
     paste_results_in_history: bool = True
+    # Tray notifications: "all" (every paste), "problems" (no matches, blocked
+    # paste, nothing copied...) or "off".
+    notify_level: str = "all"
     # Set by load() when config.json could not be read (not saved to disk).
     load_error: str = field(default="", compare=False)
+    # Set by load() when config.json was unreadable AND no backup copy could
+    # be made: save() then refuses to overwrite it (not saved to disk).
+    save_blocked: bool = field(default=False, compare=False)
 
     def to_dict(self) -> dict:
         return {
@@ -75,6 +83,7 @@ class Config:
             "palette": [""] + list(self.palette[1:]),
             "restore_delay_ms": self.restore_delay_ms,
             "paste_results_in_history": self.paste_results_in_history,
+            "notify_level": self.notify_level,
         }
 
     @classmethod
@@ -83,10 +92,9 @@ class Config:
         raw_hotkeys = d.get("hotkeys")
         for action, hk in (raw_hotkeys if isinstance(raw_hotkeys, dict) else {}).items():
             if action in hotkeys and isinstance(hk, dict):
-                hotkeys[action] = {
-                    "mods": [str(m).lower() for m in hk.get("mods", [])],
-                    "key": str(hk.get("key", "")),
-                }
+                mods = _parse_mods(hk.get("mods"))
+                if mods:
+                    hotkeys[action] = {"mods": mods, "key": str(hk.get("key", ""))}
         raw_rules = d.get("rules")
         rules = [Rule.from_dict(r) for r in (raw_rules if isinstance(raw_rules, list) else [])
                  if isinstance(r, dict)]
@@ -97,16 +105,49 @@ class Config:
         palette[0] = ""  # the backup slot is never restored from disk
         try:
             delay = int(d.get("restore_delay_ms", 800))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):  # json.load accepts Infinity
             delay = 800
         return cls(hotkeys=hotkeys, rules=rules,
-                   chain_paste=bool(d.get("chain_paste", False)), palette=palette,
+                   chain_paste=_bool(d.get("chain_paste"), False), palette=palette,
                    restore_delay_ms=max(100, min(delay, 5000)),
-                   paste_results_in_history=bool(d.get("paste_results_in_history", True)))
+                   paste_results_in_history=_bool(d.get("paste_results_in_history"), True),
+                   notify_level=(d.get("notify_level") if d.get("notify_level")
+                                 in NOTIFY_LEVELS else "all"))
 
 
 def _clone(d: Dict[str, Dict]) -> Dict[str, Dict]:
     return {k: {"mods": list(v["mods"]), "key": v["key"]} for k, v in d.items()}
+
+
+def _bool(value, default: bool) -> bool:
+    """Only real JSON true/false count; "false" or 0 would be ambiguous."""
+    return value if isinstance(value, bool) else default
+
+
+def _parse_mods(raw) -> List[str]:
+    """The known modifiers in ``raw``, or [] if it isn't a list or has none
+    that keep the chord off normal typing (the caller then keeps the default:
+    a bare-letter or Shift-only hotkey would steal typing system-wide)."""
+    if not isinstance(raw, list):
+        return []
+    mods: List[str] = []
+    for m in raw:
+        name = _MOD_NAMES.get(m.lower()) if isinstance(m, str) else None
+        if name and name not in mods:
+            mods.append(name)
+    return [] if mods in ([], ["shift"]) else mods
+
+
+def _read_json(path: str):
+    # OneDrive sync or a virus scanner can lock the file for a moment.
+    for attempt in range(4):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return json.load(fh)
+        except PermissionError:
+            if attempt == 3:
+                raise
+            time.sleep(0.2)
 
 
 def load() -> Config:
@@ -116,8 +157,7 @@ def load() -> Config:
     returned defaults carry ``load_error`` so the app can tell the user."""
     path = config_path()
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        data = _read_json(path)
         if not isinstance(data, dict):
             raise ValueError("top level is not a JSON object")
         return Config.from_dict(data)
@@ -125,12 +165,14 @@ def load() -> Config:
         return Config()
     except Exception as exc:  # corrupt / unreadable: keep a copy, don't crash
         backup = f"{path}.broken-{time.strftime('%Y%m%d-%H%M%S')}"
+        cfg = Config()
         try:
             shutil.copy2(path, backup)
             where = f"A copy was saved as:\n{backup}"
         except OSError:
-            where = "WARNING: a backup copy could not be made."
-        cfg = Config()
+            where = ("WARNING: a backup copy could not be made, so settings "
+                     "changes will not be saved over it.")
+            cfg.save_blocked = True
         cfg.load_error = (f"config.json could not be read ({exc}).\n\n{where}\n\n"
                           "SmartClipboard started with default settings. Fix the "
                           "file and copy it back over config.json, then restart.")
@@ -138,7 +180,14 @@ def load() -> Config:
 
 
 def save(cfg: Config) -> None:
+    """Write config.json. Raises OSError on failure, and also when load()
+    could neither read the file nor back it up: it may hold the user's only
+    copy of their settings."""
     path = config_path()
+    if cfg.save_blocked:
+        raise OSError(f"{path} could not be read when SmartClipboard started and "
+                      "no backup copy could be made, so it was not overwritten. "
+                      "Fix or move the file, then restart SmartClipboard.")
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(cfg.to_dict(), fh, indent=2)
