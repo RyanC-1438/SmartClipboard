@@ -69,6 +69,11 @@ class Config:
     # Tray notifications: "all" (every paste), "problems" (no matches, blocked
     # paste, nothing copied...) or "off".
     notify_level: str = "all"
+    # Whether the Settings window shows the General box (hotkeys, startup...).
+    show_general: bool = True
+    # Keep the Settings window above other windows (a plain window flag; no
+    # admin rights involved).
+    always_on_top: bool = False
     # Set by load() when config.json could not be read (not saved to disk).
     load_error: str = field(default="", compare=False)
     # Set by load() when config.json was unreadable AND no backup copy could
@@ -84,6 +89,8 @@ class Config:
             "restore_delay_ms": self.restore_delay_ms,
             "paste_results_in_history": self.paste_results_in_history,
             "notify_level": self.notify_level,
+            "show_general": self.show_general,
+            "always_on_top": self.always_on_top,
         }
 
     @classmethod
@@ -112,7 +119,9 @@ class Config:
                    restore_delay_ms=max(100, min(delay, 5000)),
                    paste_results_in_history=_bool(d.get("paste_results_in_history"), True),
                    notify_level=(d.get("notify_level") if d.get("notify_level")
-                                 in NOTIFY_LEVELS else "all"))
+                                 in NOTIFY_LEVELS else "all"),
+                   show_general=_bool(d.get("show_general"), True),
+                   always_on_top=_bool(d.get("always_on_top"), False))
 
 
 def _clone(d: Dict[str, Dict]) -> Dict[str, Dict]:

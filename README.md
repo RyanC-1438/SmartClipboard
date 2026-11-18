@@ -91,6 +91,12 @@ Slot 1 *is* the backup clipboard: `Ctrl+Shift+Win+C` fills it and
 toggle button, and use **Options…** for the per-rule case / protect / numbers /
 regex settings. Changes save automatically.
 
+The window is laid out top-down for pinning: palette, then the rule tools (Add
+rule, Swap all, Preview, Chain), then the rules. **Pin** keeps the window on
+top of other windows (no admin needed), and **⚙** hides or shows the General
+box so a small window shows only the palette and your rules. Shrinking the
+window cuts off the bottom first. Hovering a palette slot shows its full text.
+
 The **General** box at the bottom holds:
 - **Change hotkeys…**: pick modifiers and a key for each action. The change
   takes effect immediately (no restart). If another app already owns a chord,

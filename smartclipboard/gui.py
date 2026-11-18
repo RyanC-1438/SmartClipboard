@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import queue
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from typing import Callable, Dict, List, Optional
 
@@ -35,7 +36,7 @@ from .findreplace import Rule, apply_rules_spans, rule_error
 _ON_BG = "#2e7d32"
 _OFF_BG = "#9e9e9e"
 _MUTED = "#666"
-_PREVIEW_CHARS = 26
+_STATUS_IDLE = "Auto-saved"
 
 _HOTKEY_LABELS = {
     "backup_copy": "Copy selection to backup clipboard (palette slot 1)",
@@ -75,14 +76,23 @@ class Tooltip:
         text = self.text_fn()
         if not text:
             return
-        x = self.widget.winfo_rootx() + 8
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
         self._tip = tw = tk.Toplevel(self.widget)
         tw.wm_overrideredirect(True)
-        tw.wm_geometry(f"+{x}+{y}")
+        # Topmost, or it opens behind the Settings window when that window is
+        # pinned "always on top" (e.g. with PowerToys) and is never seen.
+        tw.wm_attributes("-topmost", True)
         tk.Label(tw, text=text, justify="left", background="#ffffe0",
                  relief="solid", borderwidth=1, font=("Consolas", 9),
-                 wraplength=520, padx=4, pady=2).pack()
+                 wraplength=640, padx=4, pady=2).pack()
+        # Below the widget, kept on screen (above it if there's no room).
+        tw.update_idletasks()
+        w, h = tw.winfo_reqwidth(), tw.winfo_reqheight()
+        sw, sh = tw.winfo_screenwidth(), tw.winfo_screenheight()
+        x = min(self.widget.winfo_rootx() + 8, sw - w - 4)
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        if y + h > sh:
+            y = max(0, self.widget.winfo_rooty() - h - 4)
+        tw.wm_geometry(f"+{max(0, x)}+{y}")
 
     def _hide(self, _e=None) -> None:
         self._cancel()
@@ -91,11 +101,49 @@ class Tooltip:
             self._tip = None
 
 
-def _preview(text: str, limit: int = _PREVIEW_CHARS) -> str:
-    """One-line preview: whitespace collapsed, newlines shown as ⏎."""
+def _flatten(text: str) -> str:
+    """Whitespace collapsed, newlines shown as ⏎."""
     flat = " ⏎ ".join(line.strip() for line in text.strip().splitlines())
-    flat = " ".join(flat.split())
-    return flat if len(flat) <= limit else flat[:limit - 1] + "…"
+    return " ".join(flat.split())
+
+
+def _fit_lines(text: str, font: tkfont.Font, px: int, lines: int = 2) -> str:
+    """Break ``text`` (flattened) into at most ``lines`` lines that each fit
+    in ``px`` pixels, ending with … if it doesn't all fit. Breaks mid-word, so
+    long PLC identifiers still fill both lines."""
+    flat = _flatten(text)
+    out, pos = [], 0
+    for n in range(lines):
+        if pos >= len(flat):
+            break
+        end = pos
+        while end < len(flat) and font.measure(flat[pos:end + 1]) <= px:
+            end += 1
+        end = max(end, pos + 1)
+        if n == lines - 1 and end < len(flat):
+            while end > pos + 1 and font.measure(flat[pos:end] + "…") > px:
+                end -= 1
+            out.append(flat[pos:end] + "…")
+        else:
+            out.append(flat[pos:end])
+        pos = end
+        while pos < len(flat) and flat[pos] == " ":
+            pos += 1  # don't start a line with a space
+    return "\n".join(out)
+
+
+_TIP_MAX_LINES = 40
+_TIP_MAX_CHARS = 4000
+
+
+def _tip_body(text: str) -> str:
+    """The full slot text for a tooltip, trimmed only if it's huge."""
+    lines = text[:_TIP_MAX_CHARS].splitlines()[:_TIP_MAX_LINES]
+    body = "\n".join(lines)
+    if body != text.rstrip("\n"):
+        rest = len(text.splitlines()) - len(lines)
+        body += f"\n… (+{rest} more lines)" if rest > 0 else "…"
+    return body
 
 
 class PaletteBar(ttk.Frame):
@@ -108,6 +156,7 @@ class PaletteBar(ttk.Frame):
         self._shown: List[str | None] = [None] * PALETTE_SIZE
         self._flashing = [False] * PALETTE_SIZE
         self.buttons: List[tk.Button] = []
+        self._font = tkfont.Font(family="Segoe UI", size=8)
         for i in range(PALETTE_SIZE):
             self.columnconfigure(i, weight=1, uniform="palette")
             caption = "1 · backup (C/V)" if i == 0 else str(i + 1)
@@ -115,14 +164,20 @@ class PaletteBar(ttk.Frame):
                       font=("Segoe UI", 8)).grid(row=0, column=i, sticky="w", padx=2)
             # width=1 so long previews are clipped instead of widening the
             # column; the uniform grid columns share the window width equally.
-            btn = tk.Button(self, font=("Segoe UI", 8), anchor="w", justify="left",
-                            relief="groove", padx=4, pady=3, width=1,
+            # height=2: two lines of preview, filled by _fit_lines.
+            btn = tk.Button(self, font=self._font, anchor="w", justify="left",
+                            relief="groove", padx=4, pady=2, width=1, height=2,
                             command=lambda i=i: self._copy(i))
             btn.grid(row=1, column=i, sticky="ew", padx=2)
             btn.bind("<Button-3>", lambda _e, i=i: self._store(i))
             btn.bind("<Button-2>", lambda _e, i=i: self._clear(i))
+            btn.bind("<Configure>", lambda _e, i=i: self._resized(i))
             Tooltip(btn, lambda i=i: self._tip(i))
             self.buttons.append(btn)
+        self.refresh()
+
+    def _resized(self, i: int) -> None:
+        self._shown[i] = None  # re-fit the preview to the new width
         self.refresh()
 
     def _tip(self, i: int) -> str:
@@ -130,8 +185,7 @@ class PaletteBar(ttk.Frame):
         help_line = "Left-click: copy  ·  Right-click: store clipboard  ·  Middle-click: clear"
         if not text:
             return help_line
-        body = text if len(text) <= 600 else text[:600] + "\n…"
-        return f"{body}\n\n({len(text)} chars)  {help_line}"
+        return f"{_tip_body(text)}\n\n({len(text)} chars)  {help_line}"
 
     def _copy(self, i: int) -> None:
         text = self.cfg.palette[i]
@@ -171,7 +225,8 @@ class PaletteBar(ttk.Frame):
                 continue
             self._shown[i] = text
             if text:
-                btn.config(text=_preview(text), fg="black")
+                px = max(btn.winfo_width() - 14, 40)  # minus padding + border
+                btn.config(text=_fit_lines(text, self._font, px), fg="black")
             else:
                 btn.config(text="(empty)", fg="#999")
 
@@ -435,6 +490,7 @@ class PreviewWindow(tk.Toplevel):
         super().__init__(parent)
         self.title("Preview rules")
         self.geometry("560x420")
+        self.transient(parent)  # stays above Settings, even when it's pinned
         self.rules_fn = rules_fn
         self._on_close = on_close
         self.protocol("WM_DELETE_WINDOW", self.close)
@@ -489,33 +545,29 @@ class SettingsWindow:
         self.preview: Optional[PreviewWindow] = None
         self._status_after: Optional[str] = None
         root.title("SmartClipboard — Settings")
-        root.geometry("720x700")
-        root.minsize(640, 580)
+        root.geometry("720x680")
+        # Small minimum so the window can be shrunk to just the top part when
+        # pinned on top. Everything is packed top-down and Tk squeezes the
+        # last-packed widgets first, so shrinking cuts off the General box,
+        # then the rule list; the palette and rule tools stay visible.
+        root.minsize(560, 150)
         root.protocol("WM_DELETE_WINDOW", self.hide)
         ttk.Style(root).configure("Bad.TEntry", foreground="#c62828")
+        root.attributes("-topmost", cfg.always_on_top)
 
-        outer = ttk.Frame(root, padding=12)
+        outer = ttk.Frame(root, padding=(8, 6, 8, 8))
         outer.pack(fill="both", expand=True)
 
-        pal = ttk.LabelFrame(outer, text="Palette  (left-click copy · right-click "
-                             "store clipboard · middle-click clear)", padding=(6, 2, 6, 6))
-        pal.pack(fill="x", pady=(0, 10))
-        self.palette = PaletteBar(pal, cfg, on_change=self._save)
+        self.palette = PaletteBar(outer, cfg, on_change=self._save)
         self.palette.pack(fill="x")
 
-        ttk.Label(outer, text="Find & Replace rules (all applied together on "
-                  "replace-paste; higher rule wins a tie):",
-                  font=("Segoe UI", 10, "bold")).pack(anchor="w")
-
-        # Bottom sections are packed before the expanding rules area so they
-        # keep their space when the window is small.
-        self._build_general(outer)
         self._build_rule_tools(outer)
 
         # Scrollable area holding a header row plus one grid row per rule.
+        # height=60 keeps its *requested* size small; expand fills the rest.
         canvas_wrap = ttk.Frame(outer)
-        canvas_wrap.pack(fill="both", expand=True, pady=(4, 6))
-        self.canvas = tk.Canvas(canvas_wrap, highlightthickness=0)
+        canvas_wrap.pack(fill="both", expand=True, pady=(2, 0))
+        self.canvas = tk.Canvas(canvas_wrap, highlightthickness=0, height=60)
         vscroll = ttk.Scrollbar(canvas_wrap, orient="vertical",
                                 command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=vscroll.set)
@@ -540,12 +592,13 @@ class SettingsWindow:
             "<MouseWheel>", self._on_mousewheel))
         self.canvas.bind("<Leave>", lambda _e: self.canvas.unbind_all("<MouseWheel>"))
 
+        self._build_general(outer)
         self._build_rows()
 
     # --- layout pieces ---
     def _build_rule_tools(self, outer) -> None:
         btns = ttk.Frame(outer)
-        btns.pack(side="bottom", fill="x")
+        btns.pack(fill="x", pady=(6, 0))
         ttk.Button(btns, text="+ Add rule", command=self._add).pack(side="left")
         swap_all = ttk.Button(btns, text="↔ Swap all", command=self._swap_all)
         swap_all.pack(side="left", padx=(6, 0))
@@ -563,14 +616,26 @@ class SettingsWindow:
             "Rules Z1→Z2 and Z2→Z3, clipboard 'Z1Status':\n"
             "  1st press pastes Z2Status, 2nd pastes Z3Status, then stays there.\n"
             "Copying anything starts over from the clipboard."))
-        self.status = ttk.Label(btns, text="Changes save automatically.",
-                                foreground=_MUTED)
-        self.status.pack(side="right")
+        self._gear = ttk.Button(btns, width=5, command=self._toggle_general)
+        self._gear.pack(side="right")
+        self._pin_var = tk.BooleanVar(value=self.cfg.always_on_top)
+        self._pin_btn = ttk.Button(btns, width=6, command=self._click_pin)
+        self._pin_btn.pack(side="right", padx=(0, 4))
+        self._refresh_pin_btn()
+        Tooltip(self._pin_btn, lambda: "Keep this window on top of other windows.")
+        Tooltip(self._gear, lambda: ("Hide" if self.cfg.show_general else "Show")
+                + " the General box (hotkeys, start with Windows, notifications,\n"
+                "restore delay). Hide it to fit more rules when the window is small.")
+        self.status = ttk.Label(btns, text=_STATUS_IDLE, foreground=_MUTED)
+        self.status.pack(side="right", padx=(0, 6))
+        Tooltip(self.status, lambda: "All rules are applied together in one pass; "
+                "when two match at the same spot,\nthe higher rule wins. "
+                "Changes save automatically.")
 
     def _build_general(self, outer) -> None:
-        gen = ttk.LabelFrame(outer, text="General", padding=8)
-        gen.pack(side="bottom", fill="x", pady=(10, 0))
+        self.general = gen = ttk.LabelFrame(outer, text="General", padding=8)
         gen.columnconfigure(0, weight=1)
+        self._apply_general_visibility()
         self.hotkey_label = ttk.Label(gen, font=("Consolas", 9), justify="left")
         self.hotkey_label.grid(row=0, column=0, sticky="w")
         ttk.Button(gen, text="Change hotkeys…", command=self._edit_hotkeys).grid(
@@ -612,6 +677,32 @@ class SettingsWindow:
                 "yours is put back.\nRaise it if a slow app sometimes pastes the original "
                 "text instead.")
 
+    def _apply_general_visibility(self) -> None:
+        if self.cfg.show_general:
+            self.general.pack(fill="x", pady=(8, 0))
+            self._gear.configure(text="⚙▴")
+        else:
+            self.general.pack_forget()
+            self._gear.configure(text="⚙▾")
+
+    def _click_pin(self) -> None:
+        self._pin_var.set(not self._pin_var.get())
+        self._toggle_pin()
+
+    def _refresh_pin_btn(self) -> None:
+        self._pin_btn.configure(text="Unpin" if self._pin_var.get() else "Pin")
+
+    def _toggle_pin(self) -> None:
+        self.cfg.always_on_top = bool(self._pin_var.get())
+        self.root.attributes("-topmost", self.cfg.always_on_top)
+        self._refresh_pin_btn()
+        self._save()
+
+    def _toggle_general(self) -> None:
+        self.cfg.show_general = not self.cfg.show_general
+        self._apply_general_visibility()
+        self._save()
+
     def _refresh_hotkey_label(self) -> None:
         lines = []
         for action, text in _HOTKEY_LABELS.items():
@@ -625,8 +716,7 @@ class SettingsWindow:
         if self._status_after:
             self.root.after_cancel(self._status_after)
         self._status_after = self.root.after(
-            3000, lambda: self.status.configure(text="Changes save automatically.",
-                                                foreground=_MUTED))
+            3000, lambda: self.status.configure(text=_STATUS_IDLE, foreground=_MUTED))
 
     # --- mouse wheel scrolling ---
     def _on_mousewheel(self, event) -> None:
