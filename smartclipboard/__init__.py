@@ -14,6 +14,7 @@ audit:
   - win.py            hidden window + message loop for hotkeys and the tray
   - resources.py      paths to bundled assets (the icons)
   - startup.py        optional per-user "Start with Windows" entry
+  - winmouse.py       reliable middle-click for palette/snippet buttons
   - gui.py            tkinter settings window, palette and pins
   - app.py            entry point; ties everything together
 """

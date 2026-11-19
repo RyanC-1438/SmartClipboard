@@ -30,6 +30,7 @@ from . import clipboard
 from . import config as config_mod
 from . import hotkeys as hotkeys_mod
 from . import startup
+from . import winmouse
 from .config import DEFAULT_HOTKEYS, LABEL_MAX, PALETTE_SIZE, PIN_PAGES, PINS_PER_PAGE, Config
 from .findreplace import Rule, apply_rules_spans, rule_error
 from .resources import ICON, resource_path
@@ -125,6 +126,18 @@ class Tooltip:
         if self._tip is not None:
             self._tip.destroy()
             self._tip = None
+
+
+def _bind_middle_click(widget: tk.Widget, callback: Callable[[], None]) -> None:
+    """Middle-click handler that works with every mouse/touchpad: caught from
+    the Windows message directly (see winmouse.py), because Tk drops middle
+    clicks from drivers that don't update the button state. Falls back to a
+    plain Tk binding if that isn't possible."""
+    def run() -> None:
+        Tooltip.hide_all()
+        callback()
+    if not winmouse.on_middle_click(widget, run):
+        widget.bind("<Button-2>", lambda _e: run())
 
 
 def _flatten(text: str) -> str:
@@ -279,7 +292,7 @@ class PaletteBar(ttk.Frame):
                             command=lambda i=i: self._copy(i))
             btn.grid(row=1, column=i, sticky="ew", padx=2)
             btn.bind("<Button-3>", lambda _e, i=i: self._store(i))
-            btn.bind("<Button-2>", lambda _e, i=i: self._clear(i))
+            _bind_middle_click(btn, lambda i=i: self._clear(i))
             # Ctrl+right-click also clears: some mice/touchpads remap the middle button.
             btn.bind("<Control-Button-3>", lambda _e, i=i: self._clear(i) or "break")
             btn.bind("<Configure>", lambda _e, i=i: self._resized(i))
@@ -473,7 +486,7 @@ class PinsBar(ttk.Frame):
             btn.grid(row=0, column=k, sticky="ew", padx=1)
             btn.bind("<Button-3>", lambda _e, k=k: self._store(k))
             btn.bind("<Shift-Button-3>", lambda _e, k=k: self._rename(k))
-            btn.bind("<Button-2>", lambda _e, k=k: self._clear(k))
+            _bind_middle_click(btn, lambda k=k: self._clear(k))
             btn.bind("<Control-Button-3>", lambda _e, k=k: self._clear(k) or "break")
             Tooltip(btn, lambda k=k: self._tip(k))
             self.buttons.append(btn)
