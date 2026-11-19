@@ -259,16 +259,59 @@ class Features:
     def backup_paste(self) -> None:
         """Paste the backup clipboard into the focused window, then restore the
         main clipboard."""
+        self.paste_slot(1)
+
+    def paste_slot(self, n: int) -> None:
+        """Paste palette slot ``n`` (1-based; slot 1 is the backup clipboard)
+        into the focused window, then restore the main clipboard."""
         with self._lock:
-            backup = self.backup
-            if not backup:
-                self._tell("Backup clipboard is empty",
-                           "Use Ctrl+Shift+Win+C to fill it.", problem=True)
+            text = self.config.palette[n - 1]
+            if not text:
+                if n == 1:
+                    self._tell("Backup clipboard is empty",
+                               "Use Ctrl+Shift+Win+C to fill it.", problem=True)
+                else:
+                    self._tell(f"Palette slot {n} is empty",
+                               "Right-click the slot in Settings to fill it.", problem=True)
                 return
             snap, reused = self._begin()
             if snap is None:
                 return
-            self._paste(backup, snap, reused)
+            self._paste(text, snap, reused)
+
+    # --- Transform the clipboard in place ---------------------------------
+    def transform_clipboard(self) -> None:
+        """Apply the rules to the clipboard and leave the result there (no
+        paste, no restore): the user pastes it with Ctrl+V, as often as they
+        like. This also works in apps that ignore simulated keys (elevated
+        apps) and avoids any paste timing issues."""
+        with self._lock:
+            self.flush_restore()  # finish any pending paste first
+            snap = clipboard.snapshot()
+            if snap is None:
+                self._tell_busy()
+                return
+            if not snap.text:
+                self._tell("Nothing to transform", "The clipboard has no text.",
+                           problem=True)
+                return
+            result, count = apply_rules_counted(snap.text, list(self.config.rules))
+            if count == 0:
+                self._tell("No matches", "Clipboard unchanged.", problem=True)
+                return
+            history = self.config.paste_results_in_history and not snap.private
+            outcome = clipboard.set_text(result, history=history, private=snap.private)
+            if outcome is Result.BUSY:
+                self._tell_busy()
+            elif not outcome:
+                # Opened but failed partway: put the original back.
+                self._restore_now(snap, clipboard.sequence_number())
+                self._tell("Transform failed", "Couldn't update the clipboard.",
+                           problem=True)
+            else:
+                self._tell(f"{count} replacement{'s' if count != 1 else ''}",
+                           "Clipboard now: " + _one_line(result) + "  (Ctrl+V to paste)",
+                           problem=False)
 
     # --- Feature 2: find & replace on paste -----------------------------
     def next_replace_text(self, original: str, seq: int):

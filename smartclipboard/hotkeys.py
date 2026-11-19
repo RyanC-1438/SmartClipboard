@@ -36,14 +36,29 @@ _MOD_MAP = {"alt": MOD_ALT, "ctrl": MOD_CONTROL, "control": MOD_CONTROL,
 _NAMED_VK = {
     "space": 0x20, "enter": 0x0D, "tab": 0x09, "esc": 0x1B, "escape": 0x1B,
     **{f"f{i}": 0x6F + i for i in range(1, 25)},  # F1..F24 -> 0x70..0x87
+    # Numpad digits (VK_NUMPAD0..9). They only fire with NumLock on: with it
+    # off Windows sends End/Down/... instead.
+    **{f"num{i}": 0x60 + i for i in range(10)},
 }
+
+# An empty key means "this hotkey is turned off".
+KEY_OFF = ""
+KEY_OFF_LABEL = "(off)"
 
 
 # Keys offered in the Settings hotkey editor, in display order.
 KEY_CHOICES = ([chr(c) for c in range(ord("A"), ord("Z") + 1)]
                + [str(d) for d in range(10)]
+               + [f"Num{d}" for d in range(10)]
                + [f"F{i}" for i in range(1, 25)]
                + ["Space", "Enter", "Tab", "Esc"])
+
+
+def key_label(key: str) -> str:
+    """How a configured key is shown: "R", "F9", "Num1", "Space"."""
+    if not key:
+        return KEY_OFF_LABEL
+    return key.upper() if len(key) == 1 else key[:1].upper() + key[1:].lower()
 
 
 def reserved_reason(mods: List[str], key: str) -> str:
@@ -51,6 +66,8 @@ def reserved_reason(mods: List[str], key: str) -> str:
     it's fine)."""
     m = {x.lower() for x in mods}
     k = key.upper()
+    if not key:
+        return ""  # turned off
     if not m:
         return "Needs at least one modifier, or it would block normal typing."
     if m == {"shift"}:
@@ -86,8 +103,10 @@ def key_to_vk(key: str) -> int:
 def describe(mods: List[str], key: str) -> str:
     order = ["win", "ctrl", "alt", "shift"]
     given = ["ctrl" if x.lower() == "control" else x.lower() for x in mods]
+    if not key:
+        return KEY_OFF_LABEL
     parts = [m.capitalize() for m in order if m in given]
-    parts.append(key.upper())
+    parts.append(key_label(key))
     return "+".join(parts)
 
 

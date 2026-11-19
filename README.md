@@ -17,9 +17,12 @@ A second, independent clipboard that lives only in the app's memory.
 | Hotkey | Action |
 | --- | --- |
 | `Ctrl+Shift+Win+R` | Read the clipboard, apply your find/replace rules, and paste the result |
+| `Ctrl+Shift+Win+T` | **Transform in place:** apply the rules to the clipboard and leave the result there (no paste) — then paste it yourself with `Ctrl+V`, as many times as you like |
 
 Copy normally with `Ctrl+C`, then press `Ctrl+Shift+Win+R` to paste the transformed
-text. Your original clipboard contents are restored afterward.
+text. Your original clipboard contents are restored afterward. Transform in
+place is the fallback for apps that ignore simulated keys (e.g. apps running as
+administrator) or are slow to paste; pressing it again applies the rules again.
 
 Rules follow these guarantees:
 - **No regex unless you ask for it.** By default your find term and the
@@ -80,10 +83,19 @@ preview (hover for the full text):
 | Left-click | Copy the slot to the clipboard |
 | Right-click | Store the current clipboard text in the slot |
 | Middle-click | Clear the slot |
+| Ctrl+drag onto another slot | Swap the two (slots 2–5) |
 
 Slot 1 *is* the backup clipboard: `Ctrl+Shift+Win+C` fills it and
-`Ctrl+Shift+Win+V` pastes it. Like before, slot 1 lives only in memory. Slots
-2–5 are saved in `config.json` so they survive a restart.
+`Ctrl+Shift+Win+V` pastes it. Like before, slot 1 lives only in memory (so it
+can't be swapped with the others). Slots 2–5 are saved in `config.json` so they
+survive a restart.
+
+**Paste a slot without opening the window:** `Ctrl+Alt+Numpad1` … `Numpad5`
+paste palette slots 1–5 (NumLock must be on). Change or turn them off in
+Settings → Change hotkeys.
+
+Dragging only happens while **Ctrl** is held when you press; a plain click is
+always just a click, so a quick click can't turn into an accidental drag.
 
 #### Pins (optional row under the palette)
 Click **Pins ▾** to show a row of small, named slots: 6 per page, 5 pages
@@ -95,6 +107,7 @@ Click **Pins ▾** to show a row of small, named slots: 6 per page, 5 pages
 | Right-click | Store the clipboard, then type a short name (Enter to save, Esc for an automatic name) |
 | Shift+right-click | Rename without changing the contents |
 | Middle-click | Clear |
+| Ctrl+drag onto another pin | Swap the two (same page) |
 
 Hover a pin to see its name and full text.
 
@@ -106,8 +119,17 @@ in the window does the same. It remembers one change, as an "oops" button.
 With **Chain pastes** ticked, **+ Add rule** starts the new rule's Find with
 the previous rule's Replace (Z1→Z2, then Z2→…).
 
+### Tray icon
+- **Left-click** (or double-click) the tray icon to open Settings.
+- **Right-click** for the menu: *Settings…*, *Pause hotkeys* (turns every
+  hotkey off until you untick it; the icon turns grey), and *Quit*.
+- Starting `SmartClipboard.exe` again while it's running just opens Settings in
+  the running copy.
+- Tray notifications disappear after about 3 seconds.
+- If Windows Explorer restarts, the icon comes back on its own.
+
 ### Settings
-`Ctrl+Shift+Win+S` (or the tray icon → *Settings*) opens the rules table. Edit
+`Ctrl+Shift+Win+S` (or the tray icon) opens the rules table. Edit
 **Find** and **Replace** directly in the row, flip each rule On/Off with its
 toggle button, and use **Options…** for the per-rule case / protect / numbers /
 regex settings. Changes save automatically.

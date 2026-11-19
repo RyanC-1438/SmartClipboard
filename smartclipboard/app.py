@@ -21,7 +21,7 @@ from .features import Features
 from .gui import run_gui
 from .hotkeys import HotkeyManager, describe
 from .tray import TrayIcon
-from .win import MessageWindow
+from .win import MessageWindow, post_to_existing_window
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -30,6 +30,9 @@ MB_OK = 0x0
 MB_ICONWARNING = 0x30
 
 WM_APP_REBIND = 0x0400 + 2  # GUI -> worker: re-register hotkeys
+# Second launch -> running copy: open Settings. (This project's private
+# messages count up from 0x0400; the tray uses +1 and win.py's stop +100.)
+WM_APP_SHOW_SETTINGS = 0x0400 + 3
 _user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 _user32.PostMessageW.restype = wintypes.BOOL
 _user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
@@ -49,6 +52,9 @@ def _acquire_single_instance() -> bool:
 
 
 class App:
+    # Set by the tray's "Pause hotkeys"; only touched on the worker thread.
+    _hotkeys_paused: bool = False
+
     def __init__(self) -> None:
         self.config = config_mod.load()
         # Persist defaults on first run so the user has a config.json to edit,
@@ -66,7 +72,10 @@ class App:
             "backup_copy": self.features.backup_copy,
             "backup_paste": self.features.backup_paste,
             "replace_paste": self.features.replace_paste,
+            "transform_clipboard": self.features.transform_clipboard,
             "open_settings": lambda: self.command_queue.put("show"),
+            **{f"paste_slot_{n}": (lambda n=n: self.features.paste_slot(n))
+               for n in range(1, config_mod.PALETTE_SIZE + 1)},
         }
 
     def _notify(self, title: str, text: str, warning: bool = False) -> None:
@@ -78,18 +87,15 @@ class App:
         self.window = MessageWindow()
         self.hotkeys = HotkeyManager(self.window)
         self.window.on(WM_APP_REBIND, self._on_rebind)
+        self.window.on(WM_APP_SHOW_SETTINGS, lambda _w, _l: self.command_queue.put("show"))
 
-        failures = []
-        for action, callback in self._actions.items():
-            hk = self.config.hotkeys.get(action, {})
-            mods, key = hk.get("mods", []), hk.get("key", "")
-            if not self.hotkeys.register(mods, key, callback):
-                failures.append(f"  • {describe(mods, key)}  ({action})")
+        failures = self._register_all()
 
         self.tray = TrayIcon(
             self.window, f"{APP_NAME} {__version__}",
             on_settings=lambda: self.command_queue.put("show"),
             on_quit=lambda: self.command_queue.put("quit"),
+            on_pause=self._on_pause,
         )
         self._worker_ready.set()
 
@@ -114,6 +120,47 @@ class App:
             self.hotkeys.unregister_all()
         if self.window:
             self.window.destroy()
+
+    def _register_all(self) -> list:
+        """Worker thread: register every action in self._actions with its chord
+        from self.config.hotkeys. An empty key means that hotkey is turned off
+        and is skipped silently. Returns display lines for chords that could
+        not be registered."""
+        failures = []
+        for action, callback in self._actions.items():
+            hk = self.config.hotkeys.get(action, {})
+            mods, key = hk.get("mods", []), hk.get("key", "")
+            if not key:
+                continue
+            if not self.hotkeys.register(mods, key, callback):
+                failures.append(f"  • {describe(mods, key)}  ({action})")
+        return failures
+
+    # --- tray "Pause hotkeys" ---
+    def _on_pause(self, paused: bool) -> None:
+        """Worker thread (the tray menu runs in the window's message loop, the
+        thread that owns the hotkeys), so RegisterHotKey is allowed here."""
+        if self.hotkeys is None:
+            return
+        # Start from a clean slate either way so a resume never double-registers.
+        self.hotkeys.unregister_all()
+        failures = [] if paused else self._register_all()
+        self._hotkeys_paused = paused
+        if self.tray is None:
+            return
+        self.tray.set_paused(paused)
+        # Chords that failed to come back are always reported; the plain
+        # confirmations follow the Notifications setting ("off" = none).
+        quiet = getattr(self.config, "notify_level", "all") == "off"
+        if failures:
+            self.tray.notify(APP_NAME, "Hotkeys resumed, but these are in use by another app:\n"
+                             + "\n".join(f.strip() for f in failures), warning=True)
+        elif quiet:
+            pass
+        elif paused:
+            self.tray.notify(APP_NAME, "Hotkeys paused. Right-click the tray icon to resume.")
+        else:
+            self.tray.notify(APP_NAME, "Hotkeys resumed.")
 
     # --- live hotkey changes from the Settings window ---
     def rebind_hotkeys(self, wanted: dict) -> list:
@@ -144,6 +191,11 @@ class App:
                 self.hotkeys.unregister_all()
                 for action, callback in self._actions.items():
                     new = req["wanted"].get(action, old.get(action, {}))
+                    if not new.get("key", ""):
+                        # Empty key: this hotkey is turned off. Not a failure.
+                        if action in req["wanted"]:
+                            self.config.hotkeys[action] = new
+                        continue
                     if self.hotkeys.register(new.get("mods", []), new.get("key", ""), callback):
                         self.config.hotkeys[action] = new
                         continue
@@ -153,7 +205,12 @@ class App:
                     else:
                         failures.append((action, "could not be registered"))
                     prev = old.get(action, {})
-                    self.hotkeys.register(prev.get("mods", []), prev.get("key", ""), callback)
+                    if prev.get("key", ""):
+                        self.hotkeys.register(prev.get("mods", []), prev.get("key", ""), callback)
+                if self._hotkeys_paused:
+                    # The chords were registered above only to check they're
+                    # free; stay paused until the user resumes from the tray.
+                    self.hotkeys.unregister_all()
             finally:
                 req["failures"] = failures
                 req["done"].set()
@@ -167,9 +224,7 @@ class App:
             self.window.stop()
 
     def run(self) -> None:
-        if not _acquire_single_instance():
-            _message_box(f"{APP_NAME} is already running.", flags=MB_ICONWARNING)
-            return
+        """Run the app. Call only after main()'s single-instance check."""
         startup.refresh_path()
         worker = threading.Thread(target=self._worker, daemon=True, name="sc-worker")
         worker.start()
@@ -181,6 +236,14 @@ class App:
 
 
 def main() -> None:
+    # Check for a running copy BEFORE App() loads (and re-saves) config.json,
+    # so a second launch never touches the settings file.
+    if not _acquire_single_instance():
+        # Ask the running copy to open its Settings window. We create no
+        # window or tray of our own; the box is only a fallback.
+        if not post_to_existing_window(WM_APP_SHOW_SETTINGS):
+            _message_box(f"{APP_NAME} is already running.", flags=MB_ICONWARNING)
+        return
     App().run()
 
 

@@ -496,6 +496,50 @@ class TestPrivacy(FeatureTestBase):
         self.assertEqual(self.clip.writes[-1], ("set", "Z2Status", True, False))
 
 
+class TestPasteSlotAndTransform(FeatureTestBase):
+    def test_paste_slot_n(self):
+        self.copy("main")
+        self.cfg.palette[2] = "slot three"
+        self.f.paste_slot(3)
+        self.f.flush_restore()
+        self.assertEqual(self.kb.pasted, ["slot three"])
+        self.assertEqual(self.clip.text, "main")
+
+    def test_empty_slot_tells_and_pastes_nothing(self):
+        self.copy("main")
+        self.f.paste_slot(4)
+        self.assertEqual(self.kb.pasted, [])
+        self.assertEqual(self.notes[-1][0], "Palette slot 4 is empty")
+        self.assertEqual(self.clip.text, "main")
+
+    def test_transform_rewrites_clipboard_without_pasting(self):
+        self.copy("Z1Status")
+        self.f.transform_clipboard()
+        self.f.flush_restore()
+        self.assertEqual(self.kb.pasted, [])
+        self.assertEqual(self.clip.text, "Z2Status")  # stays: no restore
+
+    def test_transform_again_advances(self):
+        self.copy("Z1Status")
+        self.f.transform_clipboard()
+        self.f.transform_clipboard()
+        self.assertEqual(self.clip.text, "Z3Status")
+
+    def test_transform_no_match_leaves_clipboard(self):
+        self.copy("nothing here")
+        seq = self.clip.seq
+        self.f.transform_clipboard()
+        self.assertEqual((self.clip.text, self.clip.seq), ("nothing here", seq))
+        self.assertEqual(self.notes[-1][0], "No matches")
+
+    def test_transform_right_after_a_paste_uses_the_users_clipboard(self):
+        self.copy("Z1Status")
+        self.f.replace_paste()           # restore still pending
+        self.f.transform_clipboard()     # must restore first, then transform
+        self.assertEqual(self.kb.pasted, ["Z2Status"])
+        self.assertEqual(self.clip.text, "Z2Status")
+
+
 class TestBackupIsPaletteSlot1(FeatureTestBase):
     def test_backup_copy_fills_slot_1_and_restores_clipboard(self):
         self.copy("main")

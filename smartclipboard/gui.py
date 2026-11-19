@@ -32,6 +32,7 @@ from . import hotkeys as hotkeys_mod
 from . import startup
 from .config import LABEL_MAX, PALETTE_SIZE, PIN_PAGES, PINS_PER_PAGE, Config
 from .findreplace import Rule, apply_rules_spans, rule_error
+from .resources import ICON, resource_path
 
 _ON_BG = "#2e7d32"
 _OFF_BG = "#9e9e9e"
@@ -43,8 +44,11 @@ _HOTKEY_LABELS = {
     "backup_copy": "Copy selection to backup clipboard (palette slot 1)",
     "backup_paste": "Paste from backup clipboard (palette slot 1)",
     "replace_paste": "Paste with find & replace",
+    "transform_clipboard": "Apply rules to the clipboard (then Ctrl+V)",
     "open_settings": "Open this Settings window",
+    **{f"paste_slot_{n}": f"Paste palette slot {n}" for n in range(1, PALETTE_SIZE + 1)},
 }
+_SLOT_ACTIONS = [f"paste_slot_{n}" for n in range(1, PALETTE_SIZE + 1)]
 _NOTIFY_CHOICES = {"all": "Every paste", "problems": "Problems only", "off": "Off"}
 
 Rebind = Callable[[Dict[str, Dict]], list]
@@ -149,9 +153,78 @@ def _tip_body(text: str) -> str:
 
 # remember(description, undo_fn): offer a one-step undo of a palette change.
 Remember = Callable[[str, Callable[[], None]], None]
-_PALETTE_HELP = "Left-click: copy  ·  Right-click: store clipboard  ·  Middle-click: clear"
+
+_DROP_BG = "#d6e9ff"
+
+
+class CtrlDragSwap:
+    """Reorder a row of buttons by dragging with Ctrl held: Ctrl+press on one,
+    release over another, and the two swap. Without Ctrl nothing changes: a
+    plain click is still exactly a click, so a quick click can never turn into
+    an accidental drag.
+
+    ``can_drag(i)`` says whether button i may take part; ``swap(i, j)`` does
+    the swap (and offers undo)."""
+
+    def __init__(self, buttons: List[tk.Button], can_drag: Callable[[int], bool],
+                 swap: Callable[[int, int], None]):
+        self.buttons = buttons
+        self.can_drag = can_drag
+        self.swap = swap
+        self._source: Optional[int] = None
+        self._target: Optional[int] = None
+        for i, b in enumerate(buttons):
+            b.bind("<Control-Button-1>", lambda e, i=i: self._press(i))
+            b.bind("<Control-B1-Motion>", self._motion)
+            b.bind("<B1-Motion>", self._motion, add="+")
+            b.bind("<Control-ButtonRelease-1>", self._release)
+            b.bind("<ButtonRelease-1>", self._release, add="+")
+
+    def _press(self, i: int) -> str:
+        # "break" stops the Button's own press handling, so releasing never
+        # counts as a click (no copy) whether or not a swap happens.
+        if self.can_drag(i):
+            self._source = i
+            self.buttons[i].configure(cursor="fleur")
+        return "break"
+
+    def _index_at(self, x_root: int, y_root: int) -> Optional[int]:
+        w = self.buttons[0].winfo_containing(x_root, y_root)
+        return self.buttons.index(w) if w in self.buttons else None
+
+    def _motion(self, e) -> Optional[str]:
+        if self._source is None:
+            return None
+        j = self._index_at(e.x_root, e.y_root)
+        if j is not None and (j == self._source or not self.can_drag(j)):
+            j = None
+        if j != self._target:
+            if self._target is not None:
+                self.buttons[self._target].configure(background=self._bg)
+            if j is not None:
+                self._bg = self.buttons[j].cget("background")
+                self.buttons[j].configure(background=_DROP_BG)
+            self._target = j
+        return "break"
+
+    def _release(self, e) -> Optional[str]:
+        if self._source is None:
+            return None  # an ordinary click: let the Button handle it
+        i, j = self._source, self._target
+        self.buttons[i].configure(cursor="")
+        if j is not None:
+            self.buttons[j].configure(background=self._bg)
+        self._source = self._target = None
+        if j is not None:
+            self.swap(i, j)
+        return "break"
+
+
+_PALETTE_HELP = ("Left-click: copy  ·  Right-click: store clipboard  ·  Middle-click: clear\n"
+                 "Ctrl+drag onto another slot (2–5) to swap them")
 _PIN_HELP = ("Left-click: copy  ·  Right-click: store clipboard (then name it)\n"
-             "Shift+right-click: rename  ·  Middle-click: clear")
+             "Shift+right-click: rename  ·  Middle-click: clear\n"
+             "Ctrl+drag onto another pin on this page to swap them")
 
 
 class PaletteBar(ttk.Frame):
@@ -187,6 +260,19 @@ class PaletteBar(ttk.Frame):
             btn.bind("<Configure>", lambda _e, i=i: self._resized(i))
             Tooltip(btn, lambda i=i: self._tip(i))
             self.buttons.append(btn)
+        # Slot 1 is the memory-only backup; keep it out of swaps so a pinned
+        # item never silently becomes unsaved (or the backup gets saved).
+        self.drag = CtrlDragSwap(self.buttons, can_drag=lambda i: i > 0, swap=self._swap)
+        self.refresh()
+
+    def _swap(self, i: int, j: int) -> None:
+        p = self.cfg.palette
+        p[i], p[j] = p[j], p[i]
+
+        def undo() -> None:
+            p[i], p[j] = p[j], p[i]
+        self.remember(f"swap slots {i + 1} and {j + 1}", undo)
+        self.on_change()
         self.refresh()
 
     def _resized(self, i: int) -> None:
@@ -341,6 +427,18 @@ class PinsBar(ttk.Frame):
             btn.bind("<Button-2>", lambda _e, k=k: self._clear(k))
             Tooltip(btn, lambda k=k: self._tip(k))
             self.buttons.append(btn)
+        self.drag = CtrlDragSwap(self.buttons, can_drag=lambda k: True, swap=self._swap)
+        self.refresh()
+
+    def _swap(self, a: int, b: int) -> None:
+        pins = self.cfg.pins
+        i, j = self._index(a), self._index(b)
+        pins[i], pins[j] = pins[j], pins[i]
+
+        def undo() -> None:
+            pins[i], pins[j] = pins[j], pins[i]
+        self.remember("swap pins", undo)
+        self.on_change()
         self.refresh()
 
     def _index(self, k: int) -> int:
@@ -633,19 +731,20 @@ class HotkeyDialog(tk.Toplevel):
                 v = tk.BooleanVar(value=name in mods)
                 ttk.Checkbutton(frm, text=text, variable=v).grid(row=row, column=col, padx=2)
                 mod_vars[name] = v
-            key_var = tk.StringVar(value=str(hk.get("key", "")).upper()
-                                   if len(str(hk.get("key", ""))) == 1
-                                   else str(hk.get("key", "")).capitalize())
-            ttk.Combobox(frm, textvariable=key_var, values=hotkeys_mod.KEY_CHOICES,
+            key_var = tk.StringVar(value=hotkeys_mod.key_label(str(hk.get("key", ""))))
+            ttk.Combobox(frm, textvariable=key_var,
+                         values=[hotkeys_mod.KEY_OFF_LABEL] + hotkeys_mod.KEY_CHOICES,
                          width=7, state="readonly").grid(row=row, column=5, padx=(6, 0))
             self._vars[action] = (mod_vars, key_var)
 
-        ttk.Label(frm, foreground=_MUTED,
+        ttk.Label(frm, foreground=_MUTED, justify="left",
                   text="Tip: keep Ctrl+Shift+Win, which nothing else uses. "
-                       "Avoid Win+number and Win+Ctrl+Shift+B.").grid(
-            row=10, column=0, columnspan=6, sticky="w", pady=(10, 0))
+                       "Avoid Win+number and Win+Ctrl+Shift+B.\n"
+                       "Numpad keys (Num0–Num9) need NumLock on. "
+                       "Choose (off) to turn a hotkey off.").grid(
+            row=90, column=0, columnspan=6, sticky="w", pady=(10, 0))
         btns = ttk.Frame(frm)
-        btns.grid(row=11, column=0, columnspan=6, sticky="e", pady=(12, 0))
+        btns.grid(row=91, column=0, columnspan=6, sticky="e", pady=(12, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=4)
         ttk.Button(btns, text="Apply", command=self._apply).grid(row=0, column=1)
         self.grab_set()
@@ -655,7 +754,9 @@ class HotkeyDialog(tk.Toplevel):
         out = {}
         for action, (mod_vars, key_var) in self._vars.items():
             mods = [name for name, _t in self._MODS if mod_vars[name].get()]
-            out[action] = {"mods": mods, "key": key_var.get()}
+            key = key_var.get()
+            out[action] = {"mods": mods,
+                           "key": hotkeys_mod.KEY_OFF if key == hotkeys_mod.KEY_OFF_LABEL else key}
         return out
 
     def problems(self, wanted: Dict[str, Dict]) -> List[str]:
@@ -665,6 +766,8 @@ class HotkeyDialog(tk.Toplevel):
             reason = hotkeys_mod.reserved_reason(hk["mods"], hk["key"])
             if reason:
                 msgs.append(f"{name}: {reason}")
+            if not hk["key"]:
+                continue  # turned off
             chord = (frozenset(hk["mods"]), hk["key"].lower())
             if chord in seen:
                 msgs.append(f"{name}: same chord as \"{_HOTKEY_LABELS[seen[chord]]}\".")
@@ -961,11 +1064,21 @@ class SettingsWindow:
         self._save()
 
     def _refresh_hotkey_label(self) -> None:
-        lines = []
-        for action, text in _HOTKEY_LABELS.items():
+        def combo(action: str) -> str:
             hkc = self.cfg.hotkeys.get(action, {})
-            combo = hotkeys_mod.describe(hkc.get("mods", []), hkc.get("key", ""))
-            lines.append(f"{combo:<22}  {text}")
+            return hotkeys_mod.describe(hkc.get("mods", []), hkc.get("key", ""))
+        lines = [f"{combo(a):<22}  {text}" for a, text in _HOTKEY_LABELS.items()
+                 if a not in _SLOT_ACTIONS]
+        # The five slot hotkeys on one line: "Ctrl+Alt+Num1…Num5" when they
+        # follow the default pattern, otherwise listed.
+        slots = [self.cfg.hotkeys.get(a, {}) for a in _SLOT_ACTIONS]
+        mods = {tuple(sorted(h.get("mods", []))) for h in slots}
+        keys = [hotkeys_mod.key_label(h.get("key", "")) for h in slots]
+        if len(mods) == 1 and keys == [f"Num{n}" for n in range(1, PALETTE_SIZE + 1)]:
+            summary = combo(_SLOT_ACTIONS[0]) + f"…Num{PALETTE_SIZE}"
+        else:
+            summary = ", ".join(combo(a) for a in _SLOT_ACTIONS)
+        lines.append(f"{summary:<22}  Paste palette slot 1–{PALETTE_SIZE}")
         self.hotkey_label.configure(text="\n".join(lines))
 
     def _say(self, msg: str) -> None:
@@ -1140,6 +1253,10 @@ def run_gui(cfg: Config, command_queue: "queue.Queue", on_save: Callable[[], Non
             on_quit: Callable[[], None], rebind: Optional[Rebind] = None) -> None:
     """Create the Tk root and poll the cross-thread command queue."""
     root = tk.Tk()
+    try:  # app icon for Settings and its dialogs (instead of Tk's feather)
+        root.iconbitmap(default=resource_path(ICON))
+    except tk.TclError:
+        pass
     win = SettingsWindow(root, cfg, on_save, rebind)
     root.withdraw()  # start hidden in the tray
 

@@ -34,6 +34,13 @@ DEFAULT_HOTKEYS: Dict[str, Dict] = {
     "backup_paste": {"mods": ["ctrl", "shift", "win"], "key": "V"},
     "replace_paste": {"mods": ["ctrl", "shift", "win"], "key": "R"},
     "open_settings": {"mods": ["ctrl", "shift", "win"], "key": "S"},
+    # Rewrite the clipboard with the rules, without pasting (then Ctrl+V).
+    "transform_clipboard": {"mods": ["ctrl", "shift", "win"], "key": "T"},
+    # Paste palette slot N. Ctrl+Alt+Numpad: easy to press, not used by
+    # IDEs/browsers (Ctrl+number switches browser tabs; F9-F11 are debugger
+    # keys). Numpad hotkeys need NumLock on.
+    **{f"paste_slot_{n}": {"mods": ["ctrl", "alt"], "key": f"Num{n}"}
+       for n in range(1, PALETTE_SIZE + 1)},
 }
 _MOD_NAMES = {"ctrl": "ctrl", "control": "ctrl", "shift": "shift", "alt": "alt", "win": "win"}
 
