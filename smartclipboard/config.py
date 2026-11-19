@@ -18,6 +18,10 @@ from .findreplace import Rule
 APP_DIR_NAME = "SmartClipboard"
 CONFIG_FILENAME = "config.json"
 PALETTE_SIZE = 5
+PINS_PER_PAGE = 6
+PIN_PAGES = 5
+PIN_COUNT = PINS_PER_PAGE * PIN_PAGES
+LABEL_MAX = 24
 NOTIFY_LEVELS = ("all", "problems", "off")
 
 # Default hotkeys. Modifier strings are a subset of {"win","ctrl","alt","shift"}
@@ -74,6 +78,12 @@ class Config:
     # Keep the Settings window above other windows (a plain window flag; no
     # admin rights involved).
     always_on_top: bool = False
+    # The small "pins" row under the palette: PIN_COUNT slots of
+    # {"text": ..., "label": ...}, shown PINS_PER_PAGE at a time. Saved.
+    pins: List[Dict[str, str]] = field(
+        default_factory=lambda: [{"text": "", "label": ""} for _ in range(PIN_COUNT)])
+    show_pins: bool = False
+    pin_page: int = 0
     # Set by load() when config.json could not be read (not saved to disk).
     load_error: str = field(default="", compare=False)
     # Set by load() when config.json was unreadable AND no backup copy could
@@ -91,6 +101,9 @@ class Config:
             "notify_level": self.notify_level,
             "show_general": self.show_general,
             "always_on_top": self.always_on_top,
+            "pins": [dict(p) for p in self.pins],
+            "show_pins": self.show_pins,
+            "pin_page": self.pin_page,
         }
 
     @classmethod
@@ -121,11 +134,34 @@ class Config:
                    notify_level=(d.get("notify_level") if d.get("notify_level")
                                  in NOTIFY_LEVELS else "all"),
                    show_general=_bool(d.get("show_general"), True),
-                   always_on_top=_bool(d.get("always_on_top"), False))
+                   always_on_top=_bool(d.get("always_on_top"), False),
+                   pins=_parse_pins(d.get("pins")),
+                   show_pins=_bool(d.get("show_pins"), False),
+                   pin_page=_int_in(d.get("pin_page"), 0, PIN_PAGES - 1, 0))
 
 
 def _clone(d: Dict[str, Dict]) -> Dict[str, Dict]:
     return {k: {"mods": list(v["mods"]), "key": v["key"]} for k, v in d.items()}
+
+
+def _parse_pins(raw) -> List[Dict[str, str]]:
+    pins = []
+    for item in (raw if isinstance(raw, list) else [])[:PIN_COUNT]:
+        if isinstance(item, dict):
+            text = item.get("text")
+            label = item.get("label")
+            pins.append({"text": text if isinstance(text, str) else "",
+                         "label": (label if isinstance(label, str) else "")[:LABEL_MAX]})
+        else:
+            pins.append({"text": "", "label": ""})
+    pins += [{"text": "", "label": ""} for _ in range(PIN_COUNT - len(pins))]
+    return pins
+
+
+def _int_in(value, lo: int, hi: int, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return default
+    return max(lo, min(value, hi))
 
 
 def _bool(value, default: bool) -> bool:

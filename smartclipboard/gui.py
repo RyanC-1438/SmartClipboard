@@ -30,13 +30,14 @@ from . import clipboard
 from . import config as config_mod
 from . import hotkeys as hotkeys_mod
 from . import startup
-from .config import PALETTE_SIZE, Config
+from .config import LABEL_MAX, PALETTE_SIZE, PIN_PAGES, PINS_PER_PAGE, Config
 from .findreplace import Rule, apply_rules_spans, rule_error
 
 _ON_BG = "#2e7d32"
 _OFF_BG = "#9e9e9e"
 _MUTED = "#666"
 _STATUS_IDLE = "Auto-saved"
+UNDO_SECONDS = 8
 
 _HOTKEY_LABELS = {
     "backup_copy": "Copy selection to backup clipboard (palette slot 1)",
@@ -146,15 +147,27 @@ def _tip_body(text: str) -> str:
     return body
 
 
+# remember(description, undo_fn): offer a one-step undo of a palette change.
+Remember = Callable[[str, Callable[[], None]], None]
+_PALETTE_HELP = "Left-click: copy  ·  Right-click: store clipboard  ·  Middle-click: clear"
+_PIN_HELP = ("Left-click: copy  ·  Right-click: store clipboard (then name it)\n"
+             "Shift+right-click: rename  ·  Middle-click: clear")
+
+
 class PaletteBar(ttk.Frame):
     """A row of quick clipboard slots backed by ``cfg.palette``."""
 
-    def __init__(self, parent, cfg: Config, on_change: Callable[[], None]):
+    def __init__(self, parent, cfg: Config, on_change: Callable[[], None],
+                 remember: Remember):
         super().__init__(parent)
         self.cfg = cfg
         self.on_change = on_change
+        self.remember = remember
         self._shown: List[str | None] = [None] * PALETTE_SIZE
         self._flashing = [False] * PALETTE_SIZE
+        # Last value of slot 1 we know about, to offer undo when the backup
+        # hotkey (on the other thread) overwrites it.
+        self._known_backup = cfg.palette[0]
         self.buttons: List[tk.Button] = []
         self._font = tkfont.Font(family="Segoe UI", size=8)
         for i in range(PALETTE_SIZE):
@@ -182,28 +195,41 @@ class PaletteBar(ttk.Frame):
 
     def _tip(self, i: int) -> str:
         text = self.cfg.palette[i]
-        help_line = "Left-click: copy  ·  Right-click: store clipboard  ·  Middle-click: clear"
         if not text:
-            return help_line
-        return f"{_tip_body(text)}\n\n({len(text)} chars)  {help_line}"
+            return _PALETTE_HELP
+        return f"{_tip_body(text)}\n\n({len(text)} chars)  {_PALETTE_HELP}"
 
     def _copy(self, i: int) -> None:
         text = self.cfg.palette[i]
         if text and clipboard.set_text(text):
             self._flash(i, "Copied ✓")
 
+    def _set(self, i: int, text: str, what: str) -> None:
+        """Change slot ``i`` and offer an undo back to its old value."""
+        old = self.cfg.palette[i]
+        if old == text:
+            return
+        self.cfg.palette[i] = text
+        if i == 0:
+            self._known_backup = text
+        if old:
+            def undo() -> None:
+                self.cfg.palette[i] = old
+                if i == 0:
+                    self._known_backup = old
+            self.remember(f"{what} slot {i + 1}", undo)
+        self.on_change()
+
     def _store(self, i: int) -> None:
         text = clipboard.get_text()
         if not text:
             self._flash(i, "Clipboard empty")
             return
-        self.cfg.palette[i] = text
-        self.on_change()
+        self._set(i, text, "store in")
         self._flash(i, "Stored ✓")
 
     def _clear(self, i: int) -> None:
-        self.cfg.palette[i] = ""
-        self.on_change()
+        self._set(i, "", "clear")
         self.refresh()
 
     def _flash(self, i: int, msg: str) -> None:
@@ -219,6 +245,14 @@ class PaletteBar(ttk.Frame):
     def refresh(self) -> None:
         """Redraw any slot whose contents changed (slot 1 changes from the
         hotkey thread, so this is also called from the GUI poll loop)."""
+        backup = self.cfg.palette[0]
+        if backup != self._known_backup:
+            old, self._known_backup = self._known_backup, backup
+            if old:  # the backup hotkey overwrote something: offer undo
+                def undo() -> None:
+                    self.cfg.palette[0] = old
+                    self._known_backup = old
+                self.remember("backup copy", undo)
         for i, btn in enumerate(self.buttons):
             text = self.cfg.palette[i]
             if self._flashing[i] or self._shown[i] == text:
@@ -229,6 +263,172 @@ class PaletteBar(ttk.Frame):
                 btn.config(text=_fit_lines(text, self._font, px), fg="black")
             else:
                 btn.config(text="(empty)", fg="#999")
+
+
+def _auto_label(text: str, limit: int = 12) -> str:
+    """A short default name for a pin: the start of its first line."""
+    first = _flatten(text).split(" ⏎ ")[0]
+    return first if len(first) <= limit else first[:limit - 1] + "…"
+
+
+class LabelPrompt(tk.Toplevel):
+    """A tiny box under a pin to name it. Enter saves, Escape cancels."""
+
+    def __init__(self, anchor: tk.Widget, initial: str, on_ok: Callable[[str], None]):
+        super().__init__(anchor)
+        self.wm_overrideredirect(True)
+        self.wm_attributes("-topmost", True)  # the Settings window may be pinned
+        self._on_ok = on_ok
+        frm = tk.Frame(self, background="#ffffe0", borderwidth=1, relief="solid")
+        frm.pack()
+        tk.Label(frm, text="Name:", background="#ffffe0",
+                 font=("Segoe UI", 8)).pack(side="left", padx=(4, 2))
+        self.var = tk.StringVar(value=initial)
+        entry = ttk.Entry(frm, textvariable=self.var, width=16)
+        entry.pack(side="left", padx=(0, 4), pady=3)
+        entry.select_range(0, "end")
+        entry.icursor("end")
+        entry.bind("<Return>", lambda _e: self._ok())
+        entry.bind("<KP_Enter>", lambda _e: self._ok())
+        entry.bind("<Escape>", lambda _e: self.destroy())
+        entry.bind("<FocusOut>", lambda _e: self._ok())
+        self.update_idletasks()
+        x = anchor.winfo_rootx()
+        y = anchor.winfo_rooty() + anchor.winfo_height() + 2
+        self.wm_geometry(f"+{x}+{y}")
+        entry.focus_force()
+
+    def _ok(self) -> None:
+        if self.winfo_exists():
+            name = self.var.get().strip()[:LABEL_MAX]
+            self.destroy()
+            self._on_ok(name)
+
+
+class PinsBar(ttk.Frame):
+    """The optional row of small, labelled pins under the palette: pages of
+    PINS_PER_PAGE slots backed by ``cfg.pins``."""
+
+    def __init__(self, parent, cfg: Config, on_change: Callable[[], None],
+                 remember: Remember):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.on_change = on_change
+        self.remember = remember
+        self._flashing = [False] * PINS_PER_PAGE
+        self.buttons: List[tk.Button] = []
+        font = ("Segoe UI", 8)
+
+        nav = ttk.Frame(self)
+        nav.grid(row=0, column=PINS_PER_PAGE, sticky="e", padx=(4, 0))
+        self._prev = tk.Button(nav, text="◀", font=font, relief="flat", padx=2, pady=0,
+                               command=lambda: self.turn(-1))
+        self._prev.pack(side="left")
+        self._page_label = ttk.Label(nav, font=font, foreground=_MUTED, width=3,
+                                     anchor="center")
+        self._page_label.pack(side="left")
+        self._next = tk.Button(nav, text="▶", font=font, relief="flat", padx=2, pady=0,
+                               command=lambda: self.turn(1))
+        self._next.pack(side="left")
+        for k in range(PINS_PER_PAGE):
+            self.columnconfigure(k, weight=1, uniform="pins")
+            btn = tk.Button(self, font=font, anchor="w", relief="groove",
+                            padx=3, pady=0, width=1, height=1,
+                            command=lambda k=k: self._copy(k))
+            btn.grid(row=0, column=k, sticky="ew", padx=1)
+            btn.bind("<Button-3>", lambda _e, k=k: self._store(k))
+            btn.bind("<Shift-Button-3>", lambda _e, k=k: self._rename(k))
+            btn.bind("<Button-2>", lambda _e, k=k: self._clear(k))
+            Tooltip(btn, lambda k=k: self._tip(k))
+            self.buttons.append(btn)
+        self.refresh()
+
+    def _index(self, k: int) -> int:
+        return self.cfg.pin_page * PINS_PER_PAGE + k
+
+    def _pin(self, k: int) -> dict:
+        return self.cfg.pins[self._index(k)]
+
+    def turn(self, delta: int) -> None:
+        self.cfg.pin_page = (self.cfg.pin_page + delta) % PIN_PAGES
+        self._flashing = [False] * PINS_PER_PAGE  # a "Copied ✓" belongs to the old page
+        self.on_change()
+        self.refresh()
+
+    def _tip(self, k: int) -> str:
+        pin = self._pin(k)
+        if not pin["text"]:
+            return _PIN_HELP
+        head = f"[{pin['label']}]\n" if pin["label"] else ""
+        return f"{head}{_tip_body(pin['text'])}\n\n({len(pin['text'])} chars)\n{_PIN_HELP}"
+
+    def _copy(self, k: int) -> None:
+        text = self._pin(k)["text"]
+        if text and clipboard.set_text(text):
+            self._flash(k, "Copied ✓")
+
+    def _set(self, k: int, text: str, label: str, what: str) -> None:
+        i = self._index(k)
+        old = dict(self.cfg.pins[i])
+        new = {"text": text, "label": label}
+        if old == new:
+            return
+        self.cfg.pins[i] = new
+        if old["text"]:
+            def undo() -> None:
+                self.cfg.pins[i] = old
+            name = old["label"] or _auto_label(old["text"])
+            self.remember(f"{what} pin “{name}”", undo)
+        self.on_change()
+        self.refresh()
+
+    def _store(self, k: int) -> None:
+        text = clipboard.get_text()
+        if not text:
+            self._flash(k, "Empty clipboard")
+            return
+        self._set(k, text, "", "store in")
+        LabelPrompt(self.buttons[k], _auto_label(text),
+                    lambda name, k=k, text=text: self._name_stored(k, text, name))
+
+    def _name_stored(self, k: int, text: str, name: str) -> None:
+        # Only if the slot still holds what we stored (no page turn / undo since).
+        i = self._index(k)
+        if self.cfg.pins[i]["text"] == text:
+            self.cfg.pins[i] = {"text": text, "label": name}
+            self.on_change()
+            self.refresh()
+
+    def _rename(self, k: int) -> str:
+        pin = self._pin(k)
+        if pin["text"]:
+            text = pin["text"]
+            LabelPrompt(self.buttons[k], pin["label"] or _auto_label(text),
+                        lambda name: self._set(k, text, name, "rename"))
+        return "break"  # don't also run the plain right-click (store)
+
+    def _clear(self, k: int) -> None:
+        self._set(k, "", "", "clear")
+
+    def _flash(self, k: int, msg: str) -> None:
+        self._flashing[k] = True
+        self.buttons[k].config(text=msg, fg=_ON_BG)
+
+        def done() -> None:
+            self._flashing[k] = False
+            self.refresh()
+        self.after(700, done)
+
+    def refresh(self) -> None:
+        self._page_label.configure(text=f"{self.cfg.pin_page + 1}/{PIN_PAGES}")
+        for k, btn in enumerate(self.buttons):
+            if self._flashing[k]:
+                continue
+            pin = self._pin(k)
+            if pin["text"]:
+                btn.config(text=pin["label"] or _auto_label(pin["text"]), fg="black")
+            else:
+                btn.config(text="·", fg="#bbb")
 
 
 class OptionsDialog(tk.Toplevel):
@@ -558,10 +758,16 @@ class SettingsWindow:
         outer = ttk.Frame(root, padding=(8, 6, 8, 8))
         outer.pack(fill="both", expand=True)
 
-        self.palette = PaletteBar(outer, cfg, on_change=self._save)
+        self._undo_fn: Optional[Callable[[], None]] = None
+        self._undo_after: Optional[str] = None
+        self.palette = PaletteBar(outer, cfg, on_change=self._save, remember=self._remember)
         self.palette.pack(fill="x")
+        self.pins = PinsBar(outer, cfg, on_change=self._save, remember=self._remember)
 
         self._build_rule_tools(outer)
+        self._apply_pins_visibility()
+        root.bind("<Control-z>", lambda _e: self._do_undo())
+        root.bind("<Control-Z>", lambda _e: self._do_undo())
 
         # Scrollable area holding a header row plus one grid row per rule.
         # height=60 keeps its *requested* size small; expand fills the rest.
@@ -607,17 +813,22 @@ class SettingsWindow:
         ttk.Button(btns, text="Preview…", command=self._open_preview).pack(
             side="left", padx=(6, 0))
         self._chain_var = tk.BooleanVar(value=self.cfg.chain_paste)
-        chain_cb = ttk.Checkbutton(btns, text="Chain repeated replace-pastes",
+        chain_cb = ttk.Checkbutton(btns, text="Chain pastes",
                                    variable=self._chain_var, command=self._toggle_chain)
-        chain_cb.pack(side="left", padx=(14, 0))
+        chain_cb.pack(side="left", padx=(12, 0))
         Tooltip(chain_cb, lambda: (
             "Pressing replace-paste again without copying anything new applies the\n"
             "rules to what was pasted last, one step per press.\n"
             "Rules Z1→Z2 and Z2→Z3, clipboard 'Z1Status':\n"
             "  1st press pastes Z2Status, 2nd pastes Z3Status, then stays there.\n"
-            "Copying anything starts over from the clipboard."))
+            "Copying anything starts over from the clipboard.\n"
+            "While on, + Add rule starts the new Find with the last rule's Replace."))
         self._gear = ttk.Button(btns, width=5, command=self._toggle_general)
         self._gear.pack(side="right")
+        self._pins_btn = ttk.Button(btns, width=7, command=self._toggle_pins)
+        self._pins_btn.pack(side="right", padx=(0, 4))
+        Tooltip(self._pins_btn, lambda: "Show or hide the row of small, named pins under "
+                "the palette\n(6 per page, ◀ ▶ to switch pages).")
         self._pin_var = tk.BooleanVar(value=self.cfg.always_on_top)
         self._pin_btn = ttk.Button(btns, width=6, command=self._click_pin)
         self._pin_btn.pack(side="right", padx=(0, 4))
@@ -628,6 +839,10 @@ class SettingsWindow:
                 "restore delay). Hide it to fit more rules when the window is small.")
         self.status = ttk.Label(btns, text=_STATUS_IDLE, foreground=_MUTED)
         self.status.pack(side="right", padx=(0, 6))
+        # Shown for a few seconds after a palette/pin change (one step only).
+        self._undo_btn = ttk.Button(btns, text="↶ Undo", width=7, command=self._do_undo)
+        self._undo_tip = ""
+        Tooltip(self._undo_btn, lambda: self._undo_tip)
         Tooltip(self.status, lambda: "All rules are applied together in one pass; "
                 "when two match at the same spot,\nthe higher rule wins. "
                 "Changes save automatically.")
@@ -685,6 +900,48 @@ class SettingsWindow:
             self.general.pack_forget()
             self._gear.configure(text="⚙▾")
 
+    # --- pins row ---
+    def _apply_pins_visibility(self) -> None:
+        if self.cfg.show_pins:
+            self.pins.pack(fill="x", pady=(3, 0), after=self.palette)
+            self._pins_btn.configure(text="Pins ▴")
+        else:
+            self.pins.pack_forget()
+            self._pins_btn.configure(text="Pins ▾")
+
+    def _toggle_pins(self) -> None:
+        self.cfg.show_pins = not self.cfg.show_pins
+        self._apply_pins_visibility()
+        self._save()
+
+    # --- one-step undo for palette / pin changes ---
+    def _remember(self, what: str, undo_fn: Callable[[], None]) -> None:
+        self._undo_fn = undo_fn
+        self._undo_tip = f"Undo: {what}  (Ctrl+Z)"
+        if not self._undo_btn.winfo_manager():
+            self._undo_btn.pack(side="right", padx=(0, 4), before=self.status)
+        if self._undo_after:
+            self.root.after_cancel(self._undo_after)
+        self._undo_after = self.root.after(UNDO_SECONDS * 1000, self._drop_undo)
+
+    def _drop_undo(self) -> None:
+        self._undo_fn = None
+        self._undo_after = None
+        self._undo_btn.pack_forget()
+
+    def _do_undo(self) -> None:
+        fn = self._undo_fn
+        if fn is None:
+            return
+        if self._undo_after:
+            self.root.after_cancel(self._undo_after)
+        self._drop_undo()
+        fn()
+        self.palette.refresh()
+        self.pins.refresh()
+        self._save()
+        self._say("Undone.")
+
     def _click_pin(self) -> None:
         self._pin_var.set(not self._pin_var.get())
         self._toggle_pin()
@@ -740,11 +997,20 @@ class SettingsWindow:
             row.grid(i + 1, first=(i == 0), last=(i == last))  # row 0 = header
 
     def _add(self) -> None:
-        row = self._make_row(Rule(find="", replace=""))
+        # With chain on, rules usually continue a sequence (Z1→Z2, Z2→Z3...),
+        # so the new Find starts as the last rule's Replace.
+        find = ""
+        if self.cfg.chain_paste and self.rows:
+            last = self.rows[-1]
+            if not last.regex:
+                find = last.replace_var.get()
+        row = self._make_row(Rule(find=find, replace=""))
         self.rows.append(row)
         self._regrid()
         self._commit()
-        row.find_entry.focus_set()
+        (row.replace_entry if find else row.find_entry).focus_set()
+        self.canvas.update_idletasks()
+        self.canvas.yview_moveto(1.0)  # show the new row
 
     def _delete_row(self, row: RuleRow) -> None:
         row.destroy()

@@ -85,6 +85,27 @@ Slot 1 *is* the backup clipboard: `Ctrl+Shift+Win+C` fills it and
 `Ctrl+Shift+Win+V` pastes it. Like before, slot 1 lives only in memory. Slots
 2–5 are saved in `config.json` so they survive a restart.
 
+#### Pins (optional row under the palette)
+Click **Pins ▾** to show a row of small, named slots: 6 per page, 5 pages
+(◀ 1/5 ▶ on the right). They're saved in `config.json`.
+
+| Mouse | Action |
+| --- | --- |
+| Left-click | Copy the pin to the clipboard |
+| Right-click | Store the clipboard, then type a short name (Enter to save, Esc for an automatic name) |
+| Shift+right-click | Rename without changing the contents |
+| Middle-click | Clear |
+
+Hover a pin to see its name and full text.
+
+#### Undo
+Storing over, clearing or renaming a palette slot or pin (including slot 1
+being replaced by `Ctrl+Shift+Win+C`) shows **↶ Undo** for 8 seconds; `Ctrl+Z`
+in the window does the same. It remembers one change, as an "oops" button.
+
+With **Chain pastes** ticked, **+ Add rule** starts the new rule's Find with
+the previous rule's Replace (Z1→Z2, then Z2→…).
+
 ### Settings
 `Ctrl+Shift+Win+S` (or the tray icon → *Settings*) opens the rules table. Edit
 **Find** and **Replace** directly in the row, flip each rule On/Off with its
@@ -92,7 +113,7 @@ toggle button, and use **Options…** for the per-rule case / protect / numbers 
 regex settings. Changes save automatically.
 
 The window is laid out top-down for pinning: palette, then the rule tools (Add
-rule, Swap all, Preview, Chain), then the rules. **Pin** keeps the window on
+rule, Swap all, Preview, Chain pastes), then the rules. **Pin** keeps the window on
 top of other windows (no admin needed), and **⚙** hides or shows the General
 box so a small window shows only the palette and your rules. Shrinking the
 window cuts off the bottom first. Hovering a palette slot shows its full text.

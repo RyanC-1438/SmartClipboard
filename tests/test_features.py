@@ -611,6 +611,26 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg.palette, ["", "", "", "y", "z"])
         self.assertEqual(Config.from_dict({"palette": "nope"}).palette, [""] * 5)
 
+    def test_pins_roundtrip_and_sanitising(self):
+        from smartclipboard.config import LABEL_MAX, PIN_COUNT, PIN_PAGES
+        cfg = Config()
+        self.assertEqual(len(cfg.pins), PIN_COUNT)
+        self.assertFalse(cfg.show_pins)
+        cfg.pins[0] = {"text": "GVL.bX", "label": "Bit X"}
+        cfg.show_pins, cfg.pin_page = True, 2
+        config_mod.save(cfg)
+        loaded = config_mod.load()
+        self.assertEqual(loaded.pins[0], {"text": "GVL.bX", "label": "Bit X"})
+        self.assertEqual((loaded.show_pins, loaded.pin_page), (True, 2))
+        bad = Config.from_dict({"pins": [{"text": 1, "label": "L" * 99}, "x"] + [{}] * 99,
+                                "pin_page": 99, "show_pins": "yes"})
+        self.assertEqual(len(bad.pins), PIN_COUNT)
+        self.assertEqual(bad.pins[0], {"text": "", "label": "L" * LABEL_MAX})
+        self.assertEqual(bad.pins[1], {"text": "", "label": ""})
+        self.assertEqual(bad.pin_page, PIN_PAGES - 1)
+        self.assertFalse(bad.show_pins)
+        self.assertEqual(Config.from_dict({"pin_page": True}).pin_page, 0)
+
 
 class TestConfigLockedFile(unittest.TestCase):
     """config.json held by OneDrive / a virus scanner."""
