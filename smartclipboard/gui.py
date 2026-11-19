@@ -30,7 +30,6 @@ from . import clipboard
 from . import config as config_mod
 from . import hotkeys as hotkeys_mod
 from . import startup
-from . import winmouse
 from .config import DEFAULT_HOTKEYS, LABEL_MAX, PALETTE_SIZE, PIN_PAGES, PINS_PER_PAGE, Config
 from .findreplace import Rule, apply_rules_spans, rule_error
 from .resources import ICON, resource_path
@@ -129,15 +128,12 @@ class Tooltip:
 
 
 def _bind_middle_click(widget: tk.Widget, callback: Callable[[], None]) -> None:
-    """Middle-click handler that works with every mouse/touchpad: caught from
-    the Windows message directly (see winmouse.py), because Tk drops middle
-    clicks from drivers that don't update the button state. Falls back to a
-    plain Tk binding if that isn't possible."""
-    def run() -> None:
+    """Middle-click handler (Ctrl+right-click does the same, for mice whose
+    software filters plain middle-clicks before they reach any app)."""
+    def run(_e=None) -> None:
         Tooltip.hide_all()
         callback()
-    if not winmouse.on_middle_click(widget, run):
-        widget.bind("<Button-2>", lambda _e: run())
+    widget.bind("<Button-2>", run)
 
 
 def _flatten(text: str) -> str:
