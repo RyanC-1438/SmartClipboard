@@ -24,6 +24,7 @@ from . import keyboard_send
 from .clipboard import Result
 from .config import Config
 from .findreplace import apply_rules_counted
+from .hotkeys import describe
 
 Notify = Callable[[str, str, bool], None]
 
@@ -268,8 +269,10 @@ class Features:
             text = self.config.palette[n - 1]
             if not text:
                 if n == 1:
-                    self._tell("Backup clipboard is empty",
-                               "Use Ctrl+Shift+Win+C to fill it.", problem=True)
+                    hk = self.config.hotkeys.get("backup_copy", {})
+                    how = (f"Use {describe(hk.get('mods', []), hk['key'])} to fill it."
+                           if hk.get("key") else "Right-click slot 1 in Settings to fill it.")
+                    self._tell("Backup clipboard is empty", how, problem=True)
                 else:
                     self._tell(f"Palette slot {n} is empty",
                                "Right-click the slot in Settings to fill it.", problem=True)

@@ -29,13 +29,16 @@ NOTIFY_LEVELS = ("all", "problems", "off")
 # Ctrl+Shift+Win+<key>: a triple-modifier namespace that nothing else uses, and
 # which deliberately avoids combining Ctrl+Alt (that pair is AltGr on many
 # keyboard layouts). Win+Alt was avoided because Xbox Game Bar owns it.
+# Keys sit at the far left of the keyboard (Q W A D Z X) so each chord can be
+# pressed with one hand while Ctrl+Shift+Win are held: Z/X is the C/V
+# copy/paste pair moved one key left.
 DEFAULT_HOTKEYS: Dict[str, Dict] = {
-    "backup_copy": {"mods": ["ctrl", "shift", "win"], "key": "C"},
-    "backup_paste": {"mods": ["ctrl", "shift", "win"], "key": "V"},
-    "replace_paste": {"mods": ["ctrl", "shift", "win"], "key": "R"},
-    "open_settings": {"mods": ["ctrl", "shift", "win"], "key": "S"},
+    "backup_copy": {"mods": ["ctrl", "shift", "win"], "key": "Z"},
+    "backup_paste": {"mods": ["ctrl", "shift", "win"], "key": "X"},
+    "replace_paste": {"mods": ["ctrl", "shift", "win"], "key": "A"},
+    "open_settings": {"mods": ["ctrl", "shift", "win"], "key": "W"},
     # Rewrite the clipboard with the rules, without pasting (then Ctrl+V).
-    "transform_clipboard": {"mods": ["ctrl", "shift", "win"], "key": "T"},
+    "transform_clipboard": {"mods": ["ctrl", "shift", "win"], "key": "D"},
     # Paste palette slot N. Ctrl+Alt+Numpad: easy to press, not used by
     # IDEs/browsers (Ctrl+number switches browser tabs; F9-F11 are debugger
     # keys). Numpad hotkeys need NumLock on.
@@ -65,7 +68,7 @@ class Config:
     # one more step through the rules instead of pasting the same text again.
     chain_paste: bool = False
     # Palette slots shown at the top of the Settings window. Slot 0 IS the
-    # backup clipboard (Ctrl+Shift+Win+C/V); like before it is intentionally
+    # backup clipboard (the backup copy/paste hotkeys); like before it is intentionally
     # never written to disk. Slots 1..4 are pinned on purpose and are saved.
     palette: List[str] = field(default_factory=lambda: [""] * PALETTE_SIZE)
     # How long the pasted text stays on the clipboard before the user's own

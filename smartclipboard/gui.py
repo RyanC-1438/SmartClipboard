@@ -6,7 +6,7 @@ pushing onto a queue that the Tk event loop polls.
 Layout, top to bottom:
   * Palette: 5 quick clipboard slots. Left-click copies a slot to the clipboard,
     right-click stores the clipboard in it, middle-click clears it. Slot 1 is
-    the backup clipboard used by Ctrl+Shift+Win+C / V.
+    the backup clipboard used by the backup copy / paste hotkeys.
   * Rules table: Find and Replace are edited inline; each row has an On/Off
     toggle, a swap-direction button, move up/down, and an Options popup.
   * Rule tools (add, swap all, preview) and the chain toggle.
@@ -30,7 +30,7 @@ from . import clipboard
 from . import config as config_mod
 from . import hotkeys as hotkeys_mod
 from . import startup
-from .config import LABEL_MAX, PALETTE_SIZE, PIN_PAGES, PINS_PER_PAGE, Config
+from .config import DEFAULT_HOTKEYS, LABEL_MAX, PALETTE_SIZE, PIN_PAGES, PINS_PER_PAGE, Config
 from .findreplace import Rule, apply_rules_spans, rule_error
 from .resources import ICON, resource_path
 
@@ -244,11 +244,12 @@ class PaletteBar(ttk.Frame):
         self._known_backup = cfg.palette[0]
         self.buttons: List[tk.Button] = []
         self._font = tkfont.Font(family="Segoe UI", size=8)
+        self.captions: List[ttk.Label] = []
         for i in range(PALETTE_SIZE):
             self.columnconfigure(i, weight=1, uniform="palette")
-            caption = "1 · backup (C/V)" if i == 0 else str(i + 1)
-            ttk.Label(self, text=caption, foreground=_MUTED,
-                      font=("Segoe UI", 8)).grid(row=0, column=i, sticky="w", padx=2)
+            cap = ttk.Label(self, foreground=_MUTED, font=("Segoe UI", 8))
+            cap.grid(row=0, column=i, sticky="w", padx=2)
+            self.captions.append(cap)
             # width=1 so long previews are clipped instead of widening the
             # column; the uniform grid columns share the window width equally.
             # height=2: two lines of preview, filled by _fit_lines.
@@ -264,7 +265,18 @@ class PaletteBar(ttk.Frame):
         # Slot 1 is the memory-only backup; keep it out of swaps so a pinned
         # item never silently becomes unsaved (or the backup gets saved).
         self.drag = CtrlDragSwap(self.buttons, can_drag=lambda i: i > 0, swap=self._swap)
+        self.refresh_captions()
         self.refresh()
+
+    def refresh_captions(self) -> None:
+        """Slot captions; slot 1 names the keys of the backup copy/paste
+        hotkeys (e.g. "1 · backup (Z/X)") so they follow the user's choice."""
+        keys = [hotkeys_mod.key_label(self.cfg.hotkeys.get(a, {}).get("key", ""))
+                for a in ("backup_copy", "backup_paste")]
+        keys = [k for k in keys if k != hotkeys_mod.KEY_OFF_LABEL]
+        self.captions[0].configure(text="1 · backup" + (f" ({'/'.join(keys)})" if keys else ""))
+        for i, cap in enumerate(self.captions[1:], start=2):
+            cap.configure(text=str(i))
 
     def _swap(self, i: int, j: int) -> None:
         p = self.cfg.palette
@@ -749,12 +761,25 @@ class HotkeyDialog(tk.Toplevel):
                        "Numpad keys (Num0–Num9) need NumLock on. "
                        "Choose (off) to turn a hotkey off.").grid(
             row=90, column=0, columnspan=6, sticky="w", pady=(10, 0))
+        defaults = ttk.Button(frm, text="Use defaults", command=self.use_defaults)
+        defaults.grid(row=91, column=0, sticky="w", pady=(12, 0))
+        Tooltip(defaults, lambda: "Fill in the default chords (Ctrl+Shift+Win + Z X A D W, "
+                "Ctrl+Alt+Num1–5).\nNothing changes until you click Apply.")
         btns = ttk.Frame(frm)
-        btns.grid(row=91, column=0, columnspan=6, sticky="e", pady=(12, 0))
+        btns.grid(row=91, column=1, columnspan=5, sticky="e", pady=(12, 0))
         ttk.Button(btns, text="Cancel", command=self.destroy).grid(row=0, column=0, padx=4)
         ttk.Button(btns, text="Apply", command=self._apply).grid(row=0, column=1)
         self.grab_set()
         self.bind("<Escape>", lambda _e: self.destroy())
+
+    def use_defaults(self) -> None:
+        for action, (mod_vars, key_var) in self._vars.items():
+            hk = DEFAULT_HOTKEYS.get(action)
+            if hk is None:
+                continue
+            for name, var in mod_vars.items():
+                var.set(name in hk["mods"])
+            key_var.set(hotkeys_mod.key_label(hk["key"]))
 
     def wanted(self) -> Dict[str, Dict]:
         out = {}
@@ -1218,6 +1243,7 @@ class SettingsWindow:
                 failures = self.rebind(wanted)  # updates cfg.hotkeys for successes
             self._save()
             self._refresh_hotkey_label()
+            self.palette.refresh_captions()
             if failures:
                 messagebox.showwarning(
                     "Change hotkeys",

@@ -10,16 +10,16 @@ A second, independent clipboard that lives only in the app's memory.
 
 | Hotkey | Action |
 | --- | --- |
-| `Ctrl+Shift+Win+C` | Copy the current selection into the backup clipboard (your normal `Ctrl+C`/`Ctrl+V` clipboard is left untouched) |
-| `Ctrl+Shift+Win+V` | Paste from the backup clipboard |
+| `Ctrl+Shift+Win+Z` | Copy the current selection into the backup clipboard (your normal `Ctrl+C`/`Ctrl+V` clipboard is left untouched) |
+| `Ctrl+Shift+Win+X` | Paste from the backup clipboard |
 
 ### 2. Find & replace on paste
 | Hotkey | Action |
 | --- | --- |
-| `Ctrl+Shift+Win+R` | Read the clipboard, apply your find/replace rules, and paste the result |
-| `Ctrl+Shift+Win+T` | **Transform in place:** apply the rules to the clipboard and leave the result there (no paste) — then paste it yourself with `Ctrl+V`, as many times as you like |
+| `Ctrl+Shift+Win+A` | Read the clipboard, apply your find/replace rules, and paste the result |
+| `Ctrl+Shift+Win+D` | **Transform in place:** apply the rules to the clipboard and leave the result there (no paste) — then paste it yourself with `Ctrl+V`, as many times as you like |
 
-Copy normally with `Ctrl+C`, then press `Ctrl+Shift+Win+R` to paste the transformed
+Copy normally with `Ctrl+C`, then press `Ctrl+Shift+Win+A` to paste the transformed
 text. Your original clipboard contents are restored afterward. Transform in
 place is the fallback for apps that ignore simulated keys (e.g. apps running as
 administrator) or are slow to paste; pressing it again applies the rules again.
@@ -67,7 +67,7 @@ Rules follow these guarantees:
   reason) and that rule is skipped; the other rules still apply.
 
 #### Chain repeated replace-pastes (checkbox under the rules)
-With this on, pressing `Ctrl+Shift+Win+R` again **without copying anything
+With this on, pressing `Ctrl+Shift+Win+A` again **without copying anything
 new** applies the rules to what was pasted last, one step per press. With rules
 `Z1`→`Z2` and `Z2`→`Z3` and `Z1Status` on the clipboard: the 1st press pastes
 `Z2Status`, the 2nd `Z3Status`, and further presses repeat `Z3Status`. Copying
@@ -85,8 +85,8 @@ preview (hover for the full text):
 | Middle-click | Clear the slot |
 | Ctrl+drag onto another slot | Swap the two (slots 2–5) |
 
-Slot 1 *is* the backup clipboard: `Ctrl+Shift+Win+C` fills it and
-`Ctrl+Shift+Win+V` pastes it. Like before, slot 1 lives only in memory (so it
+Slot 1 *is* the backup clipboard: `Ctrl+Shift+Win+Z` fills it and
+`Ctrl+Shift+Win+X` pastes it. Like before, slot 1 lives only in memory (so it
 can't be swapped with the others). Slots 2–5 are saved in `config.json` so they
 survive a restart.
 
@@ -114,7 +114,7 @@ show in **bold blue**; ones using the automatic name stay plain.
 
 #### Undo
 Storing over, clearing or renaming a palette slot or snippet (including slot 1
-being replaced by `Ctrl+Shift+Win+C`) shows **↶ Undo** for 8 seconds; `Ctrl+Z`
+being replaced by `Ctrl+Shift+Win+Z`) shows **↶ Undo** for 8 seconds; `Ctrl+Z`
 in the window does the same. It remembers one change, as an "oops" button.
 
 With **Chain pastes** ticked, **+ Add rule** starts the new rule's Find with
@@ -130,7 +130,7 @@ the previous rule's Replace (Z1→Z2, then Z2→…).
 - If Windows Explorer restarts, the icon comes back on its own.
 
 ### Settings
-`Ctrl+Shift+Win+S` (or the tray icon) opens the rules table. Edit
+`Ctrl+Shift+Win+W` (or the tray icon) opens the rules table. Edit
 **Find** and **Replace** directly in the row, flip each rule On/Off with its
 toggle button, and use **Options…** for the per-rule case / protect / numbers /
 regex settings. Changes save automatically.
@@ -195,6 +195,20 @@ effectively unused by Windows and other apps, and it never combines `Ctrl+Alt`
 because Xbox Game Bar owns it (e.g. `Win+Alt+R` records, `Win+Alt+C` clips). If
 a hotkey is already taken, the app shows a warning at startup; change it in
 Settings → **Change hotkeys…**.
+
+The keys (Z X A D W, with Q spare) sit at the far left of the keyboard so each
+chord can be pressed with one hand. Z/X are the C/V copy/paste pair moved one
+key left. Before 1.4.1 the defaults were C/V/R/T/S: an existing config.json
+keeps whatever you had, so use **Change hotkeys… → Use defaults → Apply** to
+switch.
+
+| Ctrl+Shift+Win + | Action |
+| --- | --- |
+| Z | Copy selection to the backup clipboard (palette slot 1) |
+| X | Paste the backup clipboard |
+| A | Paste with find & replace |
+| D | Transform the clipboard in place (then `Ctrl+V`) |
+| W | Open Settings |
 
 ## Run from source
 
