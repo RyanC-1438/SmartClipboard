@@ -19,5 +19,5 @@ audit:
   - app.py            entry point; ties everything together
 """
 
-__version__ = "1.4.1"
+__version__ = "1.4.2"
 APP_NAME = "SmartClipboard"
