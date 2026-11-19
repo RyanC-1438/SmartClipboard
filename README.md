@@ -97,22 +97,23 @@ Settings → Change hotkeys.
 Dragging only happens while **Ctrl** is held when you press; a plain click is
 always just a click, so a quick click can't turn into an accidental drag.
 
-#### Pins (optional row under the palette)
-Click **Pins ▾** to show a row of small, named slots: 6 per page, 5 pages
+#### Snippets (optional row under the palette)
+Click **Snippets ▾** to show a row of small, named slots: 6 per page, 5 pages
 (◀ 1/5 ▶ on the right). They're saved in `config.json`.
 
 | Mouse | Action |
 | --- | --- |
-| Left-click | Copy the pin to the clipboard |
+| Left-click | Copy the snippet to the clipboard |
 | Right-click | Store the clipboard, then type a short name (Enter to save, Esc for an automatic name) |
 | Shift+right-click | Rename without changing the contents |
 | Middle-click | Clear |
-| Ctrl+drag onto another pin | Swap the two (same page) |
+| Ctrl+drag onto another snippet | Swap the two (same page) |
 
-Hover a pin to see its name and full text.
+Hover a snippet to see its name and full text. Snippets you named yourself
+show in **bold blue**; ones using the automatic name stay plain.
 
 #### Undo
-Storing over, clearing or renaming a palette slot or pin (including slot 1
+Storing over, clearing or renaming a palette slot or snippet (including slot 1
 being replaced by `Ctrl+Shift+Win+C`) shows **↶ Undo** for 8 seconds; `Ctrl+Z`
 in the window does the same. It remembers one change, as an "oops" button.
 

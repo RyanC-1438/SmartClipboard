@@ -38,6 +38,7 @@ _ON_BG = "#2e7d32"
 _OFF_BG = "#9e9e9e"
 _MUTED = "#666"
 _STATUS_IDLE = "Auto-saved"
+_NAMED_FG = "#1565c0"  # snippets you named yourself
 UNDO_SECONDS = 8
 
 _HOTKEY_LABELS = {
@@ -224,7 +225,7 @@ _PALETTE_HELP = ("Left-click: copy  ·  Right-click: store clipboard  ·  Middle
                  "Ctrl+drag onto another slot (2–5) to swap them")
 _PIN_HELP = ("Left-click: copy  ·  Right-click: store clipboard (then name it)\n"
              "Shift+right-click: rename  ·  Middle-click: clear\n"
-             "Ctrl+drag onto another pin on this page to swap them")
+             "Ctrl+drag onto another snippet on this page to swap them")
 
 
 class PaletteBar(ttk.Frame):
@@ -404,6 +405,8 @@ class PinsBar(ttk.Frame):
         self._flashing = [False] * PINS_PER_PAGE
         self.buttons: List[tk.Button] = []
         font = ("Segoe UI", 8)
+        self._font = font
+        self._font_named = ("Segoe UI", 8, "bold")
 
         nav = ttk.Frame(self)
         nav.grid(row=0, column=PINS_PER_PAGE, sticky="e", padx=(4, 0))
@@ -437,7 +440,7 @@ class PinsBar(ttk.Frame):
 
         def undo() -> None:
             pins[i], pins[j] = pins[j], pins[i]
-        self.remember("swap pins", undo)
+        self.remember("swap snippets", undo)
         self.on_change()
         self.refresh()
 
@@ -476,7 +479,7 @@ class PinsBar(ttk.Frame):
             def undo() -> None:
                 self.cfg.pins[i] = old
             name = old["label"] or _auto_label(old["text"])
-            self.remember(f"{what} pin “{name}”", undo)
+            self.remember(f"{what} snippet “{name}”", undo)
         self.on_change()
         self.refresh()
 
@@ -523,10 +526,13 @@ class PinsBar(ttk.Frame):
             if self._flashing[k]:
                 continue
             pin = self._pin(k)
-            if pin["text"]:
-                btn.config(text=pin["label"] or _auto_label(pin["text"]), fg="black")
+            if pin["label"] and pin["text"]:
+                # Named by you: bold blue, so it stands out from auto names.
+                btn.config(text=pin["label"], fg=_NAMED_FG, font=self._font_named)
+            elif pin["text"]:
+                btn.config(text=_auto_label(pin["text"]), fg="black", font=self._font)
             else:
-                btn.config(text="·", fg="#bbb")
+                btn.config(text="·", fg="#bbb", font=self._font)
 
 
 class OptionsDialog(tk.Toplevel):
@@ -928,10 +934,11 @@ class SettingsWindow:
             "While on, + Add rule starts the new Find with the last rule's Replace."))
         self._gear = ttk.Button(btns, width=5, command=self._toggle_general)
         self._gear.pack(side="right")
-        self._pins_btn = ttk.Button(btns, width=7, command=self._toggle_pins)
+        self._pins_btn = ttk.Button(btns, width=10, command=self._toggle_pins)
         self._pins_btn.pack(side="right", padx=(0, 4))
-        Tooltip(self._pins_btn, lambda: "Show or hide the row of small, named pins under "
-                "the palette\n(6 per page, ◀ ▶ to switch pages).")
+        Tooltip(self._pins_btn, lambda: "Show or hide the row of small, named snippets "
+                "under the palette\n(6 per page, ◀ ▶ to switch pages). "
+                "Names you typed show in bold blue.")
         self._pin_var = tk.BooleanVar(value=self.cfg.always_on_top)
         self._pin_btn = ttk.Button(btns, width=6, command=self._click_pin)
         self._pin_btn.pack(side="right", padx=(0, 4))
@@ -1007,10 +1014,10 @@ class SettingsWindow:
     def _apply_pins_visibility(self) -> None:
         if self.cfg.show_pins:
             self.pins.pack(fill="x", pady=(3, 0), after=self.palette)
-            self._pins_btn.configure(text="Pins ▴")
+            self._pins_btn.configure(text="Snippets ▴")
         else:
             self.pins.pack_forget()
-            self._pins_btn.configure(text="Pins ▾")
+            self._pins_btn.configure(text="Snippets ▾")
 
     def _toggle_pins(self) -> None:
         self.cfg.show_pins = not self.cfg.show_pins
