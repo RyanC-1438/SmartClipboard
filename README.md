@@ -82,7 +82,7 @@ preview (hover for the full text):
 | --- | --- |
 | Left-click | Copy the slot to the clipboard |
 | Right-click | Store the current clipboard text in the slot |
-| Middle-click | Clear the slot |
+| Middle-click, or Ctrl+right-click | Clear the slot |
 | Ctrl+drag onto another slot | Swap the two (slots 2–5) |
 
 Slot 1 *is* the backup clipboard: `Ctrl+Shift+Win+Z` fills it and
@@ -106,7 +106,7 @@ Click **Snippets ▾** to show a row of small, named slots: 6 per page, 5 pages
 | Left-click | Copy the snippet to the clipboard |
 | Right-click | Store the clipboard, then type a short name (Enter to save, Esc for an automatic name) |
 | Shift+right-click | Rename without changing the contents |
-| Middle-click | Clear |
+| Middle-click, or Ctrl+right-click | Clear |
 | Ctrl+drag onto another snippet | Swap the two (same page) |
 
 Hover a snippet to see its name and full text. Snippets you named yourself

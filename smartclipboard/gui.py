@@ -5,7 +5,7 @@ pushing onto a queue that the Tk event loop polls.
 
 Layout, top to bottom:
   * Palette: 5 quick clipboard slots. Left-click copies a slot to the clipboard,
-    right-click stores the clipboard in it, middle-click clears it. Slot 1 is
+    right-click stores the clipboard in it, Ctrl+right-click or middle-click clears it. Slot 1 is
     the backup clipboard used by the backup copy / paste hotkeys.
   * Rules table: Find and Replace are edited inline; each row has an On/Off
     toggle, a swap-direction button, move up/down, and an Options popup.
@@ -59,11 +59,23 @@ class Tooltip:
     """Minimal hover tooltip. ``text_fn`` is called each time it appears, so the
     tip can describe live state; an empty string means "no tooltip"."""
 
+    # While > 0 (e.g. a snippet's name box is open) no tooltip may appear, so
+    # one can't pop up on top of the box.
+    suppressed = 0
+    _all: "List[Tooltip]" = []
+
+    @classmethod
+    def hide_all(cls) -> None:
+        for tip in cls._all:
+            tip._hide()
+
     def __init__(self, widget: tk.Widget, text_fn: Callable[[], str]) -> None:
         self.widget = widget
         self.text_fn = text_fn
         self._tip: tk.Toplevel | None = None
         self._after: str | None = None
+        Tooltip._all.append(self)
+        widget.bind("<Destroy>", self._forget, add="+")
         widget.bind("<Enter>", self._schedule, add="+")
         widget.bind("<Leave>", self._hide, add="+")
         widget.bind("<ButtonPress>", self._hide, add="+")
@@ -77,8 +89,16 @@ class Tooltip:
             self.widget.after_cancel(self._after)
             self._after = None
 
+    def _forget(self, e=None) -> None:
+        if e is None or e.widget is self.widget:
+            self._hide()
+            if self in Tooltip._all:
+                Tooltip._all.remove(self)
+
     def _show(self) -> None:
         self._after = None
+        if Tooltip.suppressed:
+            return
         text = self.text_fn()
         if not text:
             return
@@ -221,11 +241,12 @@ class CtrlDragSwap:
         return "break"
 
 
-_PALETTE_HELP = ("Left-click: copy  ·  Right-click: store clipboard  ·  Middle-click: clear\n"
-                 "Ctrl+drag onto another slot (2–5) to swap them")
+_PALETTE_HELP = ("Left-click: copy  ·  Right-click: store clipboard\n"
+                 "Ctrl+right-click or middle-click: clear  ·  "
+                 "Ctrl+drag onto another slot (2–5): swap")
 _PIN_HELP = ("Left-click: copy  ·  Right-click: store clipboard (then name it)\n"
-             "Shift+right-click: rename  ·  Middle-click: clear\n"
-             "Ctrl+drag onto another snippet on this page to swap them")
+             "Shift+right-click: rename  ·  Ctrl+right-click or middle-click: clear\n"
+             "Ctrl+drag onto another snippet on this page: swap")
 
 
 class PaletteBar(ttk.Frame):
@@ -259,6 +280,8 @@ class PaletteBar(ttk.Frame):
             btn.grid(row=1, column=i, sticky="ew", padx=2)
             btn.bind("<Button-3>", lambda _e, i=i: self._store(i))
             btn.bind("<Button-2>", lambda _e, i=i: self._clear(i))
+            # Ctrl+right-click also clears: some mice/touchpads remap the middle button.
+            btn.bind("<Control-Button-3>", lambda _e, i=i: self._clear(i) or "break")
             btn.bind("<Configure>", lambda _e, i=i: self._resized(i))
             Tooltip(btn, lambda i=i: self._tip(i))
             self.buttons.append(btn)
@@ -371,13 +394,18 @@ def _auto_label(text: str, limit: int = 12) -> str:
 
 
 class LabelPrompt(tk.Toplevel):
-    """A tiny box under a pin to name it. Enter saves, Escape cancels."""
+    """A tiny box under a snippet to name it. Enter saves, Escape cancels.
+    No tooltips appear while it's open (they would cover it)."""
 
     def __init__(self, anchor: tk.Widget, initial: str, on_ok: Callable[[str], None]):
         super().__init__(anchor)
         self.wm_overrideredirect(True)
         self.wm_attributes("-topmost", True)  # the Settings window may be pinned
         self._on_ok = on_ok
+        Tooltip.hide_all()
+        Tooltip.suppressed += 1
+        self._released = False
+        self.bind("<Destroy>", self._release_tooltips)
         frm = tk.Frame(self, background="#ffffe0", borderwidth=1, relief="solid")
         frm.pack()
         tk.Label(frm, text="Name:", background="#ffffe0",
@@ -396,6 +424,12 @@ class LabelPrompt(tk.Toplevel):
         y = anchor.winfo_rooty() + anchor.winfo_height() + 2
         self.wm_geometry(f"+{x}+{y}")
         entry.focus_force()
+
+    def _release_tooltips(self, e=None) -> None:
+        # <Destroy> also fires for each child widget; count the box only once.
+        if (e is None or e.widget is self) and not self._released:
+            self._released = True
+            Tooltip.suppressed = max(0, Tooltip.suppressed - 1)
 
     def _ok(self) -> None:
         if self.winfo_exists():
@@ -440,6 +474,7 @@ class PinsBar(ttk.Frame):
             btn.bind("<Button-3>", lambda _e, k=k: self._store(k))
             btn.bind("<Shift-Button-3>", lambda _e, k=k: self._rename(k))
             btn.bind("<Button-2>", lambda _e, k=k: self._clear(k))
+            btn.bind("<Control-Button-3>", lambda _e, k=k: self._clear(k) or "break")
             Tooltip(btn, lambda k=k: self._tip(k))
             self.buttons.append(btn)
         self.drag = CtrlDragSwap(self.buttons, can_drag=lambda k: True, swap=self._swap)
